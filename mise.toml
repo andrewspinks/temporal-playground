@@ -1,0 +1,12 @@
+[tools]
+just = "latest"
+go = "latest"
+node = "latest"
+python = "latest"
+java = "latest"
+dotnet = "latest"
+ruby = "latest"
+temporal = "latest"
+uv = "latest"
+pnpm = "latest"
+gradle = "latest"
