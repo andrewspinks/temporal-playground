@@ -3,7 +3,6 @@
 histories/*.json
 .cache/
 node_modules/
-ts/*/
 
 # Java
 .gradle/
