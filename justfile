@@ -147,9 +147,77 @@ new-ts sample="hello-world" name="":
 new-py name="hello":
     @echo "TODO: scaffold Python project '{{name}}'"
 
-# Scaffold a new Java project
-new-java name="hello":
-    @echo "TODO: scaffold Java project '{{name}}'"
+# Scaffold a new Java project from temporalio/samples-java
+# Usage: just new-java <sample> [<project-name>]
+# If project-name is omitted, defaults to sample name. Auto-increments if directory exists.
+new-java sample="hello" name="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+    CACHE_DIR=".cache/samples-java"
+    SAMPLES_PKG="$CACHE_DIR/core/src/main/java/io/temporal/samples"
+
+    just _clone-samples java
+
+    # Validate sample exists
+    if [ ! -d "$SAMPLES_PKG/{{sample}}" ]; then
+        echo "Error: sample '{{sample}}' not found in samples-java." >&2
+        echo ""
+        echo "Available samples:"
+        for d in "$SAMPLES_PKG"/*/; do
+            basename "$d"
+        done | sort
+        exit 1
+    fi
+
+    # Resolve unique project directory name under java/
+    BASE="{{name}}"
+    if [ -z "$BASE" ]; then
+        BASE="{{sample}}"
+    fi
+    PROJECT_DIR="java/${BASE}"
+    SUFFIX=2
+    while [ -d "$PROJECT_DIR" ]; do
+        PROJECT_DIR="java/${BASE}-${SUFFIX}"
+        SUFFIX=$((SUFFIX + 1))
+    done
+    if [ "$PROJECT_DIR" != "java/${BASE}" ]; then
+        echo "Directory 'java/${BASE}' already exists; using '$PROJECT_DIR' instead."
+    fi
+
+    # Extract SDK version from samples repo
+    SDK_VERSION=$(grep -o "javaSDKVersion = '[^']*'" "$CACHE_DIR/build.gradle" | grep -o "'[^']*'" | tr -d "'" || echo "1.32.1")
+    echo "Using Temporal Java SDK version: $SDK_VERSION"
+
+    # Create project directory structure
+    mkdir -p "$PROJECT_DIR/src/main/java/io/temporal/samples"
+    mkdir -p "$PROJECT_DIR/src/test/java/io/temporal/samples"
+
+    # Copy sample package
+    echo "Copying sample '{{sample}}'..."
+    cp -r "$SAMPLES_PKG/{{sample}}" "$PROJECT_DIR/src/main/java/io/temporal/samples/"
+
+    # Copy common package (most samples depend on it)
+    if [ -d "$SAMPLES_PKG/common" ]; then
+        cp -r "$SAMPLES_PKG/common" "$PROJECT_DIR/src/main/java/io/temporal/samples/"
+    fi
+
+    # Copy Gradle wrapper from samples repo
+    cp "$CACHE_DIR/gradlew" "$PROJECT_DIR/gradlew"
+    cp "$CACHE_DIR/gradlew.bat" "$PROJECT_DIR/gradlew.bat"
+    cp -r "$CACHE_DIR/gradle" "$PROJECT_DIR/gradle"
+    chmod +x "$PROJECT_DIR/gradlew"
+
+    # Generate settings.gradle and build.gradle via helper script (avoids just heredoc parser issues with dots)
+    python3 .claude/java-gradle-gen.py "$PROJECT_DIR" "$BASE" "$SDK_VERSION" "{{sample}}"
+
+    echo ""
+    echo "Project '$PROJECT_DIR' ready. Next steps:"
+    echo "  cd $PROJECT_DIR"
+    echo "  just server          # start Temporal dev server (in a separate terminal)"
+    echo "  ./gradlew run -PmainClass=io.temporal.samples.{{sample}}.<MainClass>"
+    echo ""
+    echo "Replace <MainClass> with the entry point in src/main/java/io/temporal/samples/{{sample}}/"
+    ls "$PROJECT_DIR/src/main/java/io/temporal/samples/{{sample}}/"*.java 2>/dev/null | xargs -I{} basename {} .java | sort | sed 's/^/  - /'
 
 # Scaffold a new Ruby project
 new-ruby name="hello":

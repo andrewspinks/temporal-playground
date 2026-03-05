@@ -1,4 +1,7 @@
+.DS_Store
+
 histories/*.json
 .cache/
 node_modules/
 ts/*/
+java/*/
