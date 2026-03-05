@@ -1,0 +1,12 @@
+[env]
+# All settings (including secrets) live in .env — copy .env.example to get started.
+# This keeps IntelliJ (via the EnvFile plugin) and mise in sync from a single file.
+_.file = ".env"
+
+[tasks.worker]
+description = "Start the worker (connects to cloud or local based on TEMPORAL_ADDRESS)"
+run = "./gradlew run -PmainClass=io.temporal.samples.hello.CancelReproWorker"
+
+[tasks.starter]
+description = "Run the starter (connects to cloud or local based on TEMPORAL_ADDRESS)"
+run = "./gradlew run -PmainClass=io.temporal.samples.hello.CancelReproStarter"

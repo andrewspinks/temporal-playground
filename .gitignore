@@ -4,4 +4,13 @@ histories/*.json
 .cache/
 node_modules/
 ts/*/
-java/*/
+
+# Java
+.gradle/
+.idea/
+build/
+*.class
+*.jar
+!**/gradle/wrapper/gradle-wrapper.jar
+
+.env
