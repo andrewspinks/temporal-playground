@@ -29,6 +29,8 @@ versions:
     @echo "pnpm     $(pnpm --version)"
     @echo "ruby     $(ruby --version)"
     @echo "gradle   $(gradle --version | grep Gradle)"
+    @echo "rustc    $(rustc --version)"
+    @echo "cargo    $(cargo --version)"
 
 # History export & replay ──────────────────────────────
 
@@ -226,3 +228,36 @@ new-ruby name="hello":
 # Scaffold a new .NET project
 new-dotnet name="hello":
     @echo "TODO: scaffold .NET project '{{name}}'"
+
+# Scaffold a new Rust Temporal hello-world project (generated from scratch, no samples repo)
+# Usage: just new-rust [name=hello-world] [sdk_version=0.1.0-alpha.1] [rust_version=]
+new-rust name="hello-world" sdk_version="0.1.0-alpha.1" rust_version="":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    # Resolve unique project directory name under rust/
+    BASE="{{name}}"
+    PROJECT_DIR="rust/${BASE}"
+    SUFFIX=2
+    while [ -d "$PROJECT_DIR" ]; do
+        PROJECT_DIR="rust/${BASE}-${SUFFIX}"
+        SUFFIX=$((SUFFIX + 1))
+    done
+    if [ "$PROJECT_DIR" != "rust/${BASE}" ]; then
+        echo "Directory 'rust/${BASE}' already exists; using '$PROJECT_DIR' instead."
+    fi
+
+    # Create directory structure
+    mkdir -p "$PROJECT_DIR/src/bin"
+
+    # Generate all project files via helper script (avoids just heredoc parser issues with Rust syntax)
+    python3 .claude/rust-project-gen.py "$PROJECT_DIR" "$BASE" "{{sdk_version}}" "{{rust_version}}"
+
+    echo ""
+    echo "Project '$PROJECT_DIR' ready. Next steps:"
+    echo "  cd $PROJECT_DIR"
+    echo "  just server          # start Temporal dev server (in a separate terminal)"
+    echo "  just worker          # start the Worker (in a separate terminal)"
+    echo "  just start           # run the Workflow starter"
+    echo ""
+    echo "Note: first build downloads all Cargo dependencies — this may take a minute."

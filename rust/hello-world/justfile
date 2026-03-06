@@ -1,0 +1,20 @@
+# Run the worker
+worker:
+    cargo run --bin worker
+
+# Start a workflow execution
+start:
+    cargo run --bin starter
+
+# Build the project
+build:
+    cargo build
+
+# Lint with Clippy
+check:
+    cargo clippy
+
+# Format and lint
+lint:
+    cargo fmt
+    cargo clippy

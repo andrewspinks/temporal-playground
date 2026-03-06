@@ -1,0 +1,32 @@
+[workspace]
+members = [".", "temporal-test-harness"]
+resolver = "3"
+
+[package]
+name = "hello-world"
+version = "0.1.0"
+edition = "2024"
+
+[[bin]]
+name = "worker"
+path = "src/bin/worker.rs"
+
+[[bin]]
+name = "starter"
+path = "src/bin/starter.rs"
+
+[dependencies]
+temporalio-sdk = "0.1.0-alpha.1"
+temporalio-client = "0.1.0"
+temporalio-macros = "0.1.0"
+temporalio-sdk-core = "0.1.0"
+temporalio-common = "0.1.0"
+tokio = { version = "1", features = ["full"] }
+futures = "0.3"
+futures-util = "0.3"
+
+[dev-dependencies]
+temporalio-sdk-core = { version = "0.1.0", features = ["test-utilities"] }
+temporalio-common = { version = "0.1.0", features = ["test-utilities"] }
+tokio = { version = "1", features = ["full", "test-util"] }
+temporal-test-harness = { path = "temporal-test-harness" }

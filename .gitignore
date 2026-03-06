@@ -13,3 +13,6 @@ build/
 !**/gradle/wrapper/gradle-wrapper.jar
 
 .env
+
+# Rust
+target/
