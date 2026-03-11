@@ -34,33 +34,64 @@ def load_json_files(captures_dir):
 
 
 def extract_wft_detail(payload):
-    """Extract a summary of what triggered a workflow task."""
+    """Extract what triggered this workflow task.
+
+    Looks only at events in the window between the last WORKFLOW_TASK_COMPLETED
+    and WORKFLOW_TASK_SCHEDULED. Events that are command side-effects of the
+    previous WFT (e.g. TIMER_STARTED, UPDATE_ACCEPTED written after that WFT
+    completed) can appear in the same window alongside the actual trigger
+    (e.g. TIMER_FIRED). We collect all genuine trigger-type events in the
+    window; if there is more than one it means multiple things demanded a WFT
+    simultaneously and the server coalesced them into a single dispatch.
+
+    Returns (triggers: list[str], coalesced: bool).
+    """
+    TRIGGER_TYPES = {
+        "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+        "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_REQUESTED",
+        "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
+        "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
+        "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
+        "EVENT_TYPE_ACTIVITY_TASK_FAILED",
+        "EVENT_TYPE_ACTIVITY_TASK_TIMED_OUT",
+        "EVENT_TYPE_TIMER_FIRED",
+        "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
+        "EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED",
+        "EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_FAILED",
+    }
+
     history = payload.get("history", {})
     events = history.get("events", [])
-    triggers = []
-    for event in events:
+
+    # Find the window between the last WFT_COMPLETED and WFT_SCHEDULED.
+    sched_idx = None
+    completed_idx = None
+    for i, event in enumerate(events):
         et = event.get("event_type", "")
-        # Only include the most meaningful event types as triggers
-        if et in (
-            "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
-            "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_ACCEPTED",
-            "EVENT_TYPE_WORKFLOW_EXECUTION_UPDATE_COMPLETED",
-            "EVENT_TYPE_ACTIVITY_TASK_COMPLETED",
-            "EVENT_TYPE_ACTIVITY_TASK_FAILED",
-            "EVENT_TYPE_TIMER_FIRED",
-            "EVENT_TYPE_SIGNAL_EXTERNAL_WORKFLOW_EXECUTION_INITIATED",
-            "EVENT_TYPE_WORKFLOW_EXECUTION_SIGNALED",
-            "EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_COMPLETED",
-        ):
+        if et == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED":
+            completed_idx = i
+        if et == "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED":
+            sched_idx = i
+
+    start = (completed_idx + 1) if completed_idx is not None else 0
+    end = sched_idx if sched_idx is not None else len(events)
+    window = events[start:end]
+
+    triggers = []
+    for event in window:
+        et = event.get("event_type", "")
+        if et in TRIGGER_TYPES:
             short = et.replace("EVENT_TYPE_", "").replace("_", " ").title()
             triggers.append(short)
-    return triggers
+
+    return triggers, len(triggers) > 1
 
 
 def build_task(method, payload, seq, inferred=False):
     """Build a task detail dict from a poll response payload."""
     if method == "PollWorkflowTaskQueue":
         wf = payload.get("workflow_execution", {})
+        triggers, coalesced = extract_wft_detail(payload)
         return {
             "type": "Workflow",
             "seq": seq,
@@ -68,7 +99,8 @@ def build_task(method, payload, seq, inferred=False):
             "workflow_id": wf.get("workflow_id", "?"),
             "run_id": wf.get("run_id", "?"),
             "attempt": payload.get("attempt", 1),
-            "triggers": extract_wft_detail(payload),
+            "triggers": triggers,
+            "coalesced": coalesced,
             "inferred": inferred,
         }
     else:
@@ -169,6 +201,31 @@ def analyze_queues(captures_dir):
         else:
             truly_unattributed.append(call)
 
+    # --- Collect all tasks with queue label for the unified section ---
+    # Each entry: (seq, queue_label, identity, task)
+    all_tasks_flat = []
+
+    for key, identities in queues.items():
+        ns, name, kind, normal = key
+        kind_short = "NORMAL" if "NORMAL" in kind else "STICKY"
+        queue_label = f"{name} ({kind_short})"
+        for identity, info in identities.items():
+            for task in info["tasks"]:
+                all_tasks_flat.append((task.get("seq") or 0, queue_label, identity, task))
+
+    for call in truly_unattributed:
+        method = call.get("method_name", "")
+        payload = call.get("payload") or {}
+        seq = call.get("seq")
+        task = build_task(method, payload, seq) if "_decode_error" not in payload else {
+            "type": "Workflow" if "Workflow" in method else "Activity",
+            "seq": seq,
+            "decode_error": True,
+        }
+        all_tasks_flat.append((seq or 0, "? (unattributed)", "?", task))
+
+    all_tasks_flat.sort(key=lambda x: x[0])
+
     # --- Build output lines ---
     lines = []
 
@@ -189,17 +246,13 @@ def analyze_queues(captures_dir):
             identities = queues[key]
             kind_short = "NORMAL" if "NORMAL" in kind else "STICKY"
 
-            # Aggregate totals
             all_poll_types = set()
             total_polls = 0
             total_tasks = 0
-            all_tasks = []
             for identity, info in identities.items():
                 all_poll_types |= info["poll_types"]
                 total_polls += info["poll_count"]
                 total_tasks += info["task_count"]
-                for t in info["tasks"]:
-                    all_tasks.append((identity, t))
 
             poll_types = " + ".join(sorted(all_poll_types))
             task_status = f"**yes** ({total_tasks})" if total_tasks > 0 else "no"
@@ -229,52 +282,41 @@ def analyze_queues(captures_dir):
 
             lines.append("")
 
-            # Task delivery details
-            if all_tasks:
-                lines.append("#### Tasks Delivered")
-                lines.append("")
-                for identity, task in all_tasks:
-                    seq_ref = f"[{task['seq']}]" if task.get("seq") else ""
-                    inferred_note = " *(attribution inferred from workflow id)*" if task.get("inferred") else ""
-                    if task["type"] == "Workflow":
-                        lines.append(f"- {seq_ref} **Workflow task** — `{task['workflow_type']}` attempt {task['attempt']}{inferred_note}")
-                        lines.append(f"  - Workflow: `{task['workflow_id']}`")
-                        lines.append(f"  - Run: `{task['run_id']}`")
-                        if task["triggers"]:
-                            lines.append(f"  - Triggered by: {', '.join(task['triggers'])}")
-                        lines.append(f"  - Delivered to: `{identity}`")
-                    else:
-                        lines.append(f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}{inferred_note}")
-                        lines.append(f"  - Workflow: `{task['workflow_type']}` / `{task['workflow_id']}`")
-                        lines.append(f"  - Delivered to: `{identity}`")
-                    lines.append("")
+    # --- Unified task list sorted by seq ---
+    lines.append("---")
+    lines.append("")
+    lines.append("## All Tasks Delivered")
+    lines.append("")
 
-    # --- Unattributed tasks (no matching request and no workflow_id match) ---
-    if truly_unattributed:
-        lines.append("---")
+    if not all_tasks_flat:
+        lines.append("*No tasks delivered.*")
         lines.append("")
-        lines.append("## Unattributed Tasks")
-        lines.append("")
-        lines.append(f"*{len(truly_unattributed)} task(s) whose poll request was not captured and could not be"
-                     " attributed via workflow id (e.g. decode errors with no prior context).*")
-        lines.append("")
-        for call in truly_unattributed:
-            method = call.get("method_name", "")
-            payload = call.get("payload") or {}
-            seq = call.get("seq")
-            seq_ref = f"[{seq}]" if seq else ""
-            decode_err = "_decode_error" in payload
-            if decode_err:
-                lines.append(f"- {seq_ref} **{method}** — payload decode error (stream not captured)")
-            elif method == "PollWorkflowTaskQueue":
-                wf = payload.get("workflow_execution", {})
-                wf_type = payload.get("workflow_type", {}).get("name", "?")
-                lines.append(f"- {seq_ref} **Workflow task** — `{wf_type}` wf=`{wf.get('workflow_id','?')}`")
+    else:
+        for _, queue_label, identity, task in all_tasks_flat:
+            seq_ref = f"[{task['seq']}]" if task.get("seq") else ""
+            inferred_note = " *(queue inferred)*" if task.get("inferred") else ""
+
+            if task.get("decode_error"):
+                lines.append(f"- {seq_ref} **Workflow task** — payload decode error")
+                lines.append(f"  - Queue: `{queue_label}`")
+                lines.append("")
+                continue
+
+            if task["type"] == "Workflow":
+                lines.append(f"- {seq_ref} **Workflow task** — `{task['workflow_type']}` attempt {task['attempt']}{inferred_note}")
+                lines.append(f"  - Queue: `{queue_label}`")
+                lines.append(f"  - Workflow: `{task['workflow_id']}`")
+                lines.append(f"  - Run: `{task['run_id']}`")
+                if task.get("triggers"):
+                    coalesced_note = " *(coalesced into one task)*" if task.get("coalesced") else ""
+                    lines.append(f"  - Triggered by: {', '.join(task['triggers'])}{coalesced_note}")
+                lines.append(f"  - Delivered to: `{identity}`")
             else:
-                wf = payload.get("workflow_execution", {})
-                act_type = payload.get("activity_type", {}).get("name", "?")
-                lines.append(f"- {seq_ref} **Activity task** — `{act_type}` wf=`{wf.get('workflow_id','?')}`")
-        lines.append("")
+                lines.append(f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}{inferred_note}")
+                lines.append(f"  - Queue: `{queue_label}`")
+                lines.append(f"  - Workflow: `{task['workflow_type']}` / `{task['workflow_id']}`")
+                lines.append(f"  - Delivered to: `{identity}`")
+            lines.append("")
 
     return "\n".join(lines)
 
