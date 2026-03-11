@@ -6,7 +6,10 @@ and task delivery per identity. Outputs a Markdown report to queue-analysis.md
 in the captures directory, and also prints to stdout.
 
 Uses tcp_stream (TCP connection ID) to correlate poll responses back to the
-requesting worker. Falls back to stream_id-only matching for old extracts.
+requesting worker. For responses whose request frame was not captured (e.g.
+the HTTP/2 stream was opened before the capture started), falls back to
+matching by workflow_id seen in prior matched responses. Tasks that cannot
+be attributed to any queue are listed in an "Unattributed Tasks" section.
 
 Usage: python3 scripts/analyze-queues.py [captures-dir]
   Default captures-dir: captures/grpc-calls
@@ -54,6 +57,34 @@ def extract_wft_detail(payload):
     return triggers
 
 
+def build_task(method, payload, seq, inferred=False):
+    """Build a task detail dict from a poll response payload."""
+    if method == "PollWorkflowTaskQueue":
+        wf = payload.get("workflow_execution", {})
+        return {
+            "type": "Workflow",
+            "seq": seq,
+            "workflow_type": payload.get("workflow_type", {}).get("name", "?"),
+            "workflow_id": wf.get("workflow_id", "?"),
+            "run_id": wf.get("run_id", "?"),
+            "attempt": payload.get("attempt", 1),
+            "triggers": extract_wft_detail(payload),
+            "inferred": inferred,
+        }
+    else:
+        wf = payload.get("workflow_execution", {})
+        return {
+            "type": "Activity",
+            "seq": seq,
+            "activity_type": payload.get("activity_type", {}).get("name", "?"),
+            "activity_id": payload.get("activity_id", "?"),
+            "workflow_type": payload.get("workflow_type", {}).get("name", "?"),
+            "workflow_id": wf.get("workflow_id", "?"),
+            "attempt": payload.get("attempt", 1),
+            "inferred": inferred,
+        }
+
+
 def analyze_queues(captures_dir):
     calls = load_json_files(captures_dir)
 
@@ -69,6 +100,15 @@ def analyze_queues(captures_dir):
     # Index poll requests by (tcp_stream, stream_id) so we can match responses
     # to the requesting identity.
     poll_requests_by_stream = {}  # (tcp_stream, stream_id) -> (queue_key, identity)
+
+    # Built from matched responses: (workflow_id, method) -> (queue_key, identity).
+    # Keyed by method so WFT and activity responses don't clobber each other
+    # (WFTs go to the sticky queue; activities go to the normal queue).
+    # Used to attribute responses whose request frame was not captured.
+    workflow_to_queue = {}
+
+    # Non-empty responses with no matching request, deferred for fallback attribution.
+    unmatched_responses = []
 
     for call in calls:
         method = call.get("method_name", "")
@@ -95,37 +135,39 @@ def analyze_queues(captures_dir):
 
         elif direction == "response" and method in ("PollWorkflowTaskQueue", "PollActivityTaskQueue"):
             msg_len = int(call.get("grpc_message_length", "0"))
+            if msg_len == 0:
+                continue
+
             tcp = call.get("tcp_stream", "")
             sid = call.get("stream_id", "")
             lookup_key = (tcp, sid)
-            if msg_len > 0 and lookup_key in poll_requests_by_stream:
+
+            if lookup_key in poll_requests_by_stream:
                 key, identity = poll_requests_by_stream[lookup_key]
                 queues[key][identity]["task_count"] += 1
+                queues[key][identity]["tasks"].append(build_task(method, payload, seq))
 
-                # Extract task details from the response payload
-                if method == "PollWorkflowTaskQueue":
-                    wf = payload.get("workflow_execution", {})
-                    task = {
-                        "type": "Workflow",
-                        "seq": seq,
-                        "workflow_type": payload.get("workflow_type", {}).get("name", "?"),
-                        "workflow_id": wf.get("workflow_id", "?"),
-                        "run_id": wf.get("run_id", "?"),
-                        "attempt": payload.get("attempt", 1),
-                        "triggers": extract_wft_detail(payload),
-                    }
-                else:
-                    wf = payload.get("workflow_execution", {})
-                    task = {
-                        "type": "Activity",
-                        "seq": seq,
-                        "activity_type": payload.get("activity_type", {}).get("name", "?"),
-                        "activity_id": payload.get("activity_id", "?"),
-                        "workflow_type": payload.get("workflow_type", {}).get("name", "?"),
-                        "workflow_id": wf.get("workflow_id", "?"),
-                        "attempt": payload.get("attempt", 1),
-                    }
-                queues[key][identity]["tasks"].append(task)
+                # Record (workflow_id, method) → queue so unmatched responses can be attributed.
+                wf_id = (payload.get("workflow_execution") or {}).get("workflow_id", "")
+                if wf_id and wf_id not in ("?", ""):
+                    workflow_to_queue[(wf_id, method)] = (key, identity)
+            else:
+                unmatched_responses.append(call)
+
+    # --- Attribute unmatched responses via workflow_id fallback ---
+    truly_unattributed = []
+    for call in unmatched_responses:
+        method = call.get("method_name", "")
+        payload = call.get("payload") or {}
+        seq = call.get("seq")
+        wf_id = (payload.get("workflow_execution") or {}).get("workflow_id", "")
+
+        if wf_id and wf_id not in ("?", "") and (wf_id, method) in workflow_to_queue:
+            key, identity = workflow_to_queue[(wf_id, method)]
+            queues[key][identity]["task_count"] += 1
+            queues[key][identity]["tasks"].append(build_task(method, payload, seq, inferred=True))
+        else:
+            truly_unattributed.append(call)
 
     # --- Build output lines ---
     lines = []
@@ -193,18 +235,46 @@ def analyze_queues(captures_dir):
                 lines.append("")
                 for identity, task in all_tasks:
                     seq_ref = f"[{task['seq']}]" if task.get("seq") else ""
+                    inferred_note = " *(attribution inferred from workflow id)*" if task.get("inferred") else ""
                     if task["type"] == "Workflow":
-                        lines.append(f"- {seq_ref} **Workflow task** — `{task['workflow_type']}` attempt {task['attempt']}")
+                        lines.append(f"- {seq_ref} **Workflow task** — `{task['workflow_type']}` attempt {task['attempt']}{inferred_note}")
                         lines.append(f"  - Workflow: `{task['workflow_id']}`")
                         lines.append(f"  - Run: `{task['run_id']}`")
                         if task["triggers"]:
                             lines.append(f"  - Triggered by: {', '.join(task['triggers'])}")
                         lines.append(f"  - Delivered to: `{identity}`")
                     else:
-                        lines.append(f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}")
+                        lines.append(f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}{inferred_note}")
                         lines.append(f"  - Workflow: `{task['workflow_type']}` / `{task['workflow_id']}`")
                         lines.append(f"  - Delivered to: `{identity}`")
                     lines.append("")
+
+    # --- Unattributed tasks (no matching request and no workflow_id match) ---
+    if truly_unattributed:
+        lines.append("---")
+        lines.append("")
+        lines.append("## Unattributed Tasks")
+        lines.append("")
+        lines.append(f"*{len(truly_unattributed)} task(s) whose poll request was not captured and could not be"
+                     " attributed via workflow id (e.g. decode errors with no prior context).*")
+        lines.append("")
+        for call in truly_unattributed:
+            method = call.get("method_name", "")
+            payload = call.get("payload") or {}
+            seq = call.get("seq")
+            seq_ref = f"[{seq}]" if seq else ""
+            decode_err = "_decode_error" in payload
+            if decode_err:
+                lines.append(f"- {seq_ref} **{method}** — payload decode error (stream not captured)")
+            elif method == "PollWorkflowTaskQueue":
+                wf = payload.get("workflow_execution", {})
+                wf_type = payload.get("workflow_type", {}).get("name", "?")
+                lines.append(f"- {seq_ref} **Workflow task** — `{wf_type}` wf=`{wf.get('workflow_id','?')}`")
+            else:
+                wf = payload.get("workflow_execution", {})
+                act_type = payload.get("activity_type", {}).get("name", "?")
+                lines.append(f"- {seq_ref} **Activity task** — `{act_type}` wf=`{wf.get('workflow_id','?')}`")
+        lines.append("")
 
     return "\n".join(lines)
 
