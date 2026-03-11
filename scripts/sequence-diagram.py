@@ -37,23 +37,6 @@ def load_json_files(captures_dir):
     return by_seq
 
 
-def abbreviate_method(method):
-    """Shorten method names for readability."""
-    abbrevs = {
-        "GetSystemInfo": "GetSystemInfo",
-        "DescribeNamespace": "DescribeNamespace",
-        "RecordWorkerHeartbeat": "Heartbeat",
-        "PollWorkflowTaskQueue": "PollWFT",
-        "PollActivityTaskQueue": "PollAT",
-        "StartWorkflowExecution": "StartWorkflow",
-        "GetWorkflowExecutionHistory": "GetHistory",
-        "RespondWorkflowTaskCompleted": "CompleteWFT",
-        "RespondActivityTaskCompleted": "CompleteActivity",
-        "RespondActivityTaskFailed": "FailActivity",
-        "UpdateWorkflowExecution": "UpdateWorkflow",
-    }
-    return abbrevs.get(method, method)
-
 
 def extract_detail(method, detail):
     """Extract a short annotation from the payload."""
@@ -305,9 +288,9 @@ def generate_diagram(captures_dir, raw_mode=False):
             counts = pending_polls[pid]
             parts = []
             if counts.get("PollWorkflowTaskQueue", 0) > 0:
-                parts.append(f"{counts['PollWorkflowTaskQueue']}x PollWFT")
+                parts.append(f"{counts['PollWorkflowTaskQueue']}x PollWorkflowTaskQueue")
             if counts.get("PollActivityTaskQueue", 0) > 0:
-                parts.append(f"{counts['PollActivityTaskQueue']}x PollAT")
+                parts.append(f"{counts['PollActivityTaskQueue']}x PollActivityTaskQueue")
             if parts:
                 into_lines.append(f"    Note over {pid},Server: {' + '.join(parts)} (long-poll, waiting)")
             del pending_polls[pid]
@@ -337,9 +320,8 @@ def generate_diagram(captures_dir, raw_mode=False):
         if not raw_mode and not is_poll and pid in pending_polls:
             flush_polls(body_lines, pid)
 
-        abbrev = abbreviate_method(method)
         annotation = extract_detail(method, detail) if detail else ""
-        label = f"[{seq}] {abbrev}: {annotation}" if annotation else f"[{seq}] {abbrev}"
+        label = f"[{seq}] {method}: {annotation}" if annotation else f"[{seq}] {method}"
         label = label.replace('"', "'")
 
         if direction == "request":
@@ -350,12 +332,12 @@ def generate_diagram(captures_dir, raw_mode=False):
                     pending_polls[pid][method] -= 1
                     flush_polls(body_lines, pid)
                 task_type = "workflow task" if "Workflow" in method else "activity task"
-                body_lines.append(f"    Server-->>-{pid}: [{seq}] {abbrev} ({task_type} delivered)")
+                body_lines.append(f"    Server-->>-{pid}: [{seq}] {method} ({task_type} delivered)")
             elif is_poll:
                 if raw_mode:
-                    body_lines.append(f"    Server-->>-{pid}: [{seq}] {abbrev} (empty)")
+                    body_lines.append(f"    Server-->>-{pid}: [{seq}] {method} (empty)")
             else:
-                body_lines.append(f"    Server-->>-{pid}: [{seq}] {abbrev}")
+                body_lines.append(f"    Server-->>-{pid}: [{seq}] {method}")
 
     if not raw_mode:
         flush_polls(body_lines)
@@ -402,4 +384,13 @@ if __name__ == "__main__":
         sys.exit(1)
 
     diagram = generate_diagram(captures_dir, raw_mode=raw_mode)
+
+    suffix = "-raw" if raw_mode else ""
+    out_path = os.path.join(captures_dir, f"sequence{suffix}.md")
+    with open(out_path, "w") as f:
+        f.write("```mermaid\n")
+        f.write(diagram)
+        f.write("\n```\n")
+
     print(diagram)
+    print(f"\n→ Written to {out_path}", file=sys.stderr)
