@@ -1,0 +1,28 @@
+# Temporal client configuration — safe to commit (no secrets).
+# Sensitive values (e.g. TEMPORAL_API_KEY) are injected via .env.
+#
+# Select a profile at runtime:
+#   TEMPORAL_PROFILE=cloud pnpm run workflow
+#   TEMPORAL_PROFILE=cloud pnpm run start
+
+[profile.default]
+# Local dev server
+address   = "localhost:7233"
+namespace = "default"
+
+[profile.cloud]
+# Temporal Cloud — API key supplied via TEMPORAL_API_KEY in .env
+# TLS is enabled automatically when an api_key is present.
+address   = "andy-spinks-test.a2dd6.tmprl.cloud:7233"
+# address   = "localhost:7234"
+namespace = "andy-spinks-test.a2dd6"
+
+[profile.cloud-mtls]
+# Temporal Cloud — mTLS auth (cert paths are not secret, key material is)
+address   = "andy-spinks-test.a2dd6.tmprl.cloud:7233"
+# address   = "localhost:7234"
+namespace = "andy-spinks-test.a2dd6"
+
+[profile.cloud-mtls.tls]
+client_cert_path = "../../client.pem"
+client_key_path  = "../../client.key"

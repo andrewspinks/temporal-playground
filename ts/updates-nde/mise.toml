@@ -1,0 +1,3 @@
+[env]
+TEMPORAL_CONFIG_FILE = "{{config_root}}/temporal.toml"
+_.file = "{{config_root}}/.env"
