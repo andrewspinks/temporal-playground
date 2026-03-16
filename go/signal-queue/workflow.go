@@ -48,34 +48,33 @@ func RequestSchedulerWorkflow(ctx workflow.Context) error {
 		})
 
 		// Spawn a long-lived goroutine for each new type
-		for typ := range queues {
-			if started[typ] {
+		for queueType := range queues {
+			if started[queueType] {
 				continue
 			}
-			started[typ] = true
-			// typ := typ // capture loop var
+			started[queueType] = true
 			workflow.Go(ctx, func(gCtx workflow.Context) {
 				for {
 					// Wait until this type's queue has work
-					workflow.Await(gCtx, func() bool { return len(queues[typ]) > 0 })
+					workflow.Await(gCtx, func() bool { return len(queues[queueType]) > 0 })
 
-					for len(queues[typ]) > 0 {
-						requestID := queues[typ][0]
-						queues[typ] = queues[typ][1:]
+					for len(queues[queueType]) > 0 {
+						requestID := queues[queueType][0]
+						queues[queueType] = queues[queueType][1:]
 
-						logger.Info("Processing request", "type", typ, "requestID", requestID)
+						logger.Info("Processing request", "type", queueType, "requestID", requestID)
 
 						childCtx := workflow.WithChildOptions(gCtx, workflow.ChildWorkflowOptions{
-							WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(gCtx).WorkflowExecution.ID, typ, requestID),
+							WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(gCtx).WorkflowExecution.ID, queueType, requestID),
 							TaskQueue:  TaskQueue,
 						})
 
 						var result string
 						if err := workflow.ExecuteChildWorkflow(childCtx, RequestWorkflow, requestID).Get(gCtx, &result); err != nil {
-							logger.Error("Child workflow failed", "type", typ, "requestID", requestID, "error", err)
+							logger.Error("Child workflow failed", "type", queueType, "requestID", requestID, "error", err)
 							return
 						}
-						logger.Info("Processed request", "type", typ, "requestID", requestID, "result", result)
+						logger.Info("Processed request", "type", queueType, "requestID", requestID, "result", result)
 					}
 				}
 			})
