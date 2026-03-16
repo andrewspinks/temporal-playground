@@ -19,8 +19,8 @@ func main() {
 	defer c.Close()
 
 	w := worker.New(c, app.TaskQueue, worker.Options{})
-	w.RegisterWorkflow(app.RequestSchedulerWorkflow)
-	w.RegisterWorkflow(app.RequestWorkflow)
+	w.RegisterWorkflow(app.LandingZoneDeploymentWorkflow)
+	w.RegisterWorkflow(app.DeployChangesWorkflow)
 
 	log.Printf("Starting worker on task queue %q...\n", app.TaskQueue)
 	err = w.Run(worker.InterruptCh())

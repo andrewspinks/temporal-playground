@@ -9,40 +9,40 @@ import (
 
 const TaskQueue = "signal-queue"
 
-// SubmitRequest is the signal payload for submitting a request.
-type SubmitRequest struct {
-	RequestID string `json:"request_id"`
-	Type      string `json:"type"`
+// DeploymentRequest is the signal payload for submitting a request.
+type DeploymentRequest struct {
+	RequestID        string `json:"request_id"`
+	DeploymentModule string `json:"deploymentmodule"`
 }
 
-// RequestSchedulerWorkflow processes requests from a signal-driven queue.
+// LandingZoneDeploymentWorkflow processes requests from a signal-driven queue.
 // Requests of the same type are processed sequentially; different types run in parallel.
 // Uses a Selector on the signal channel to dispatch to per-type Channels.
 // Runs indefinitely, using continue-as-new to bound history.
-func RequestSchedulerWorkflow(ctx workflow.Context) error {
+func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
-	logger.Info("RequestSchedulerWorkflow started")
+	logger.Info("LandingZoneDeploymentWorkflow started")
 
 	channels := map[string]workflow.Channel{}
-	signalCh := workflow.GetSignalChannel(ctx, "submit_request")
+	signalCh := workflow.GetSignalChannel(ctx, "submit_deployment_request")
 
 	for {
 		selector := workflow.NewSelector(ctx)
-		selector.AddReceive(signalCh, func(c workflow.ReceiveChannel, more bool) {
-			var req SubmitRequest
-			c.Receive(ctx, &req)
+		selector.AddReceive(signalCh, func(receiveChannel workflow.ReceiveChannel, more bool) {
+			var req DeploymentRequest
+			receiveChannel.Receive(ctx, &req)
 
-			// Create a per-type channel and goroutine on first sight of a new type
-			if _, ok := channels[req.Type]; !ok {
-				channels[req.Type] = workflow.NewChannel(ctx)
-				ch := channels[req.Type]
-				typ := req.Type
+			// Create a per deployment module channel and goroutine on first sight of a new type
+			if _, ok := channels[req.DeploymentModule]; !ok {
+				deploymentModule := req.DeploymentModule
+				deploymentModuleChannel := workflow.NewChannel(ctx)
+				channels[req.DeploymentModule] = deploymentModuleChannel
 				workflow.Go(ctx, func(gCtx workflow.Context) {
-					processType(gCtx, typ, ch)
+					processDeploymentModule(gCtx, deploymentModule, deploymentModuleChannel)
 				})
 			}
 
-			ch := channels[req.Type]
+			ch := channels[req.DeploymentModule]
 			workflow.Go(ctx, func(gCtx workflow.Context) {
 				ch.Send(gCtx, req.RequestID)
 			})
@@ -51,42 +51,42 @@ func RequestSchedulerWorkflow(ctx workflow.Context) error {
 
 		// Guard against unbounded history growth
 		if workflow.GetInfo(ctx).GetCurrentHistoryLength() > 10_000 {
-			return workflow.NewContinueAsNewError(ctx, RequestSchedulerWorkflow)
+			return workflow.NewContinueAsNewError(ctx, LandingZoneDeploymentWorkflow)
 		}
 	}
 }
 
-// processType sequentially processes requests for a single type from the given channel.
-func processType(ctx workflow.Context, queueType string, ch workflow.ReceiveChannel) {
+// processDeploymentModule sequentially processes requests for a single deployment module from the given channel.
+func processDeploymentModule(ctx workflow.Context, deploymentModule string, ch workflow.ReceiveChannel) {
 	logger := workflow.GetLogger(ctx)
 	for {
 		var requestID string
 		ch.Receive(ctx, &requestID)
 
-		logger.Info("Processing request", "type", queueType, "requestID", requestID)
+		logger.Info("Processing request", "deploymentModule", deploymentModule, "requestID", requestID)
 
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, queueType, requestID),
+			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, deploymentModule, requestID),
 			TaskQueue:  TaskQueue,
 		})
 
 		var result string
-		if err := workflow.ExecuteChildWorkflow(childCtx, RequestWorkflow, requestID).Get(ctx, &result); err != nil {
-			logger.Error("Child workflow failed", "type", queueType, "requestID", requestID, "error", err)
+		if err := workflow.ExecuteChildWorkflow(childCtx, DeployChangesWorkflow, DeploymentRequest{DeploymentModule: deploymentModule, RequestID: requestID}).Get(ctx, &result); err != nil {
+			logger.Error("Child workflow failed", "deploymentModule", deploymentModule, "requestID", requestID, "error", err)
 			return
 		}
-		logger.Info("Processed request", "type", queueType, "requestID", requestID, "result", result)
+		logger.Info("Processed request", "deploymentModule", deploymentModule, "requestID", requestID, "result", result)
 	}
 }
 
-// RequestWorkflow simulates processing a single request.
-func RequestWorkflow(ctx workflow.Context, requestID string) (string, error) {
+// DeployChangesWorkflow simulates processing a single request for a DeploymentModule.
+func DeployChangesWorkflow(ctx workflow.Context, deployment DeploymentRequest) (string, error) {
 	logger := workflow.GetLogger(ctx)
-	logger.Info("RequestWorkflow started", "requestID", requestID)
+	logger.Info("DeployChangesWorkflow started", "deploymentModule", deployment.DeploymentModule, "requestID", deployment.RequestID)
 
 	if err := workflow.Sleep(ctx, 15*time.Second); err != nil {
 		return "", err
 	}
 
-	return requestID, nil
+	return deployment.RequestID, nil
 }

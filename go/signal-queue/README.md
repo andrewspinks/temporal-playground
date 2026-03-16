@@ -21,7 +21,7 @@ Submit a request:
 ```sh
 curl -s -X POST http://localhost:8090/request \
   -H "Content-Type: application/json" \
-  -d '{"lz_id": "lz-1", "type": "subnet", "request_id": "req-1"}' | jq .
+  -d '{"lz_id": "lz-1", "deploymentmodule": "subnet", "request_id": "req-1"}' | jq .
 ```
 
 Build and test:

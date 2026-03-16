@@ -12,15 +12,15 @@ import (
 )
 
 type Request struct {
-	LZID      string `json:"lz_id"`
-	RequestID string `json:"request_id"`
-	Type      string `json:"type"`
+	LZ_ID            string `json:"lz_id"`
+	RequestID        string `json:"request_id"`
+	DeploymentModule string `json:"deploymentmodule"`
 }
 
 type Response struct {
-	RequestID string `json:"request_id"`
-	Type      string `json:"type"`
-	Status    string `json:"status"`
+	RequestID        string `json:"request_id"`
+	DeploymentModule string `json:"deploymentmodule"`
+	Status           string `json:"status"`
 }
 
 func main() {
@@ -37,7 +37,7 @@ func main() {
 			return
 		}
 
-		if req.LZID == "" || req.RequestID == "" || req.Type == "" {
+		if req.LZ_ID == "" || req.RequestID == "" || req.DeploymentModule == "" {
 			http.Error(w, "lz_id, request_id, and type are required", http.StatusBadRequest)
 			return
 		}
@@ -46,16 +46,16 @@ func main() {
 		// already running) and sends the submit_request signal with the request.
 		_, err := c.SignalWithStartWorkflow(
 			r.Context(),
-			req.LZID,                        // workflow ID
-			"submit_request",                // signal name
-			app.SubmitRequest{               // signal arg
-				RequestID: req.RequestID,
-				Type:      req.Type,
+			req.LZ_ID,                   // workflow ID
+			"submit_deployment_request", // signal name
+			app.DeploymentRequest{ // signal arg
+				RequestID:        req.RequestID,
+				DeploymentModule: req.DeploymentModule,
 			},
 			client.StartWorkflowOptions{
 				TaskQueue: app.TaskQueue,
 			},
-			app.RequestSchedulerWorkflow, // workflow function
+			app.LandingZoneDeploymentWorkflow, // workflow function
 		)
 		if err != nil {
 			log.Printf("SignalWithStartWorkflow failed: %v", err)
@@ -65,13 +65,13 @@ func main() {
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(Response{
-			RequestID: req.RequestID,
-			Type:      req.Type,
-			Status:    "received",
+			RequestID:        req.RequestID,
+			DeploymentModule: req.DeploymentModule,
+			Status:           "received",
 		})
 	})
 
-	addr := ":8090"
+	addr := ":8091"
 	log.Printf("API server listening on %s\n", addr)
 	log.Fatal(http.ListenAndServe(addr, nil))
 }
