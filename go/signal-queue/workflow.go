@@ -17,73 +17,65 @@ type SubmitRequest struct {
 
 // RequestSchedulerWorkflow processes requests from a signal-driven queue.
 // Requests of the same type are processed sequentially; different types run in parallel.
+// Uses a Selector on the signal channel to dispatch to per-type Channels.
 // Runs indefinitely, using continue-as-new to bound history.
 func RequestSchedulerWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("RequestSchedulerWorkflow started")
 
-	// Per-type queues; each type gets a long-lived goroutine
-	queues := map[string][]string{}
-	started := map[string]bool{}
-
-	// Goroutine continuously receives signals and routes to per-type queues
-	workflow.Go(ctx, func(gCtx workflow.Context) {
-		ch := workflow.GetSignalChannel(gCtx, "submit_request")
-		for {
-			var req SubmitRequest
-			ch.Receive(gCtx, &req)
-			queues[req.Type] = append(queues[req.Type], req.RequestID)
-		}
-	})
+	channels := map[string]workflow.Channel{}
+	signalCh := workflow.GetSignalChannel(ctx, "submit_request")
 
 	for {
-		// Wait until a new type appears that doesn't have a goroutine yet
-		workflow.Await(ctx, func() bool {
-			for typ := range queues {
-				if !started[typ] {
-					return true
-				}
-			}
-			return false
-		})
+		selector := workflow.NewSelector(ctx)
+		selector.AddReceive(signalCh, func(c workflow.ReceiveChannel, more bool) {
+			var req SubmitRequest
+			c.Receive(ctx, &req)
 
-		// Spawn a long-lived goroutine for each new type
-		for queueType := range queues {
-			if started[queueType] {
-				continue
+			// Create a per-type channel and goroutine on first sight of a new type
+			if _, ok := channels[req.Type]; !ok {
+				channels[req.Type] = workflow.NewChannel(ctx)
+				ch := channels[req.Type]
+				typ := req.Type
+				workflow.Go(ctx, func(gCtx workflow.Context) {
+					processType(gCtx, typ, ch)
+				})
 			}
-			started[queueType] = true
+
+			ch := channels[req.Type]
 			workflow.Go(ctx, func(gCtx workflow.Context) {
-				for {
-					// Wait until this type's queue has work
-					workflow.Await(gCtx, func() bool { return len(queues[queueType]) > 0 })
-
-					for len(queues[queueType]) > 0 {
-						requestID := queues[queueType][0]
-						queues[queueType] = queues[queueType][1:]
-
-						logger.Info("Processing request", "type", queueType, "requestID", requestID)
-
-						childCtx := workflow.WithChildOptions(gCtx, workflow.ChildWorkflowOptions{
-							WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(gCtx).WorkflowExecution.ID, queueType, requestID),
-							TaskQueue:  TaskQueue,
-						})
-
-						var result string
-						if err := workflow.ExecuteChildWorkflow(childCtx, RequestWorkflow, requestID).Get(gCtx, &result); err != nil {
-							logger.Error("Child workflow failed", "type", queueType, "requestID", requestID, "error", err)
-							return
-						}
-						logger.Info("Processed request", "type", queueType, "requestID", requestID, "result", result)
-					}
-				}
+				ch.Send(gCtx, req.RequestID)
 			})
-		}
+		})
+		selector.Select(ctx)
 
 		// Guard against unbounded history growth
 		if workflow.GetInfo(ctx).GetCurrentHistoryLength() > 10_000 {
 			return workflow.NewContinueAsNewError(ctx, RequestSchedulerWorkflow)
 		}
+	}
+}
+
+// processType sequentially processes requests for a single type from the given channel.
+func processType(ctx workflow.Context, queueType string, ch workflow.ReceiveChannel) {
+	logger := workflow.GetLogger(ctx)
+	for {
+		var requestID string
+		ch.Receive(ctx, &requestID)
+
+		logger.Info("Processing request", "type", queueType, "requestID", requestID)
+
+		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
+			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, queueType, requestID),
+			TaskQueue:  TaskQueue,
+		})
+
+		var result string
+		if err := workflow.ExecuteChildWorkflow(childCtx, RequestWorkflow, requestID).Get(ctx, &result); err != nil {
+			logger.Error("Child workflow failed", "type", queueType, "requestID", requestID, "error", err)
+			return
+		}
+		logger.Info("Processed request", "type", queueType, "requestID", requestID, "result", result)
 	}
 }
 
