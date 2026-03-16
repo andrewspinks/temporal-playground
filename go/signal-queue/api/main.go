@@ -14,10 +14,12 @@ import (
 type Request struct {
 	LZID      string `json:"lz_id"`
 	RequestID string `json:"request_id"`
+	Type      string `json:"type"`
 }
 
 type Response struct {
 	RequestID string `json:"request_id"`
+	Type      string `json:"type"`
 	Status    string `json:"status"`
 }
 
@@ -35,18 +37,21 @@ func main() {
 			return
 		}
 
-		if req.LZID == "" || req.RequestID == "" {
-			http.Error(w, "lz_id and request_id are required", http.StatusBadRequest)
+		if req.LZID == "" || req.RequestID == "" || req.Type == "" {
+			http.Error(w, "lz_id, request_id, and type are required", http.StatusBadRequest)
 			return
 		}
 
 		// SignalWithStartWorkflow atomically starts the scheduler workflow (if not
-		// already running) and sends the submit_request signal with the request ID.
+		// already running) and sends the submit_request signal with the request.
 		_, err := c.SignalWithStartWorkflow(
 			r.Context(),
-			req.LZID,            // workflow ID
-			"submit_request",    // signal name
-			req.RequestID,       // signal arg
+			req.LZID,                        // workflow ID
+			"submit_request",                // signal name
+			app.SubmitRequest{               // signal arg
+				RequestID: req.RequestID,
+				Type:      req.Type,
+			},
 			client.StartWorkflowOptions{
 				TaskQueue: app.TaskQueue,
 			},
@@ -61,6 +66,7 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(Response{
 			RequestID: req.RequestID,
+			Type:      req.Type,
 			Status:    "received",
 		})
 	})
