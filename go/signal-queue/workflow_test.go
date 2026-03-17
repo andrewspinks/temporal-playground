@@ -47,11 +47,11 @@ func (s *WorkflowTestSuite) TestDifferentTypesProcessedInParallel() {
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(DeployChangesWorkflow)
 
-	var deploymentExecutionOrder []string
+	var executed []DeploymentRequest
 	env.OnWorkflow(DeployChangesWorkflow, mock.Anything, mock.Anything).
 		Return("done", nil).
 		Run(func(args mock.Arguments) {
-			deploymentExecutionOrder = append(deploymentExecutionOrder, args.Get(1).(DeploymentRequest).RequestID)
+			executed = append(executed, args.Get(1).(DeploymentRequest))
 		})
 
 	env.RegisterDelayedCallback(func() {
@@ -67,6 +67,17 @@ func (s *WorkflowTestSuite) TestDifferentTypesProcessedInParallel() {
 	env.ExecuteWorkflow(LandingZoneDeploymentWorkflow)
 
 	s.True(env.IsWorkflowCompleted())
-	s.Equal([]string{"r1", "r3", "r2", "r4"}, deploymentExecutionOrder)
-	s.Len(deploymentExecutionOrder, 4)
+	s.Len(executed, 4)
+	s.Equal([]string{"r1", "r2", "r4"}, requestIDsForModule(executed, "typeA"))
+	s.Equal([]string{"r3"}, requestIDsForModule(executed, "typeB"))
+}
+
+func requestIDsForModule(executed []DeploymentRequest, module string) []string {
+	var ids []string
+	for _, req := range executed {
+		if req.DeploymentModule == module {
+			ids = append(ids, req.RequestID)
+		}
+	}
+	return ids
 }
