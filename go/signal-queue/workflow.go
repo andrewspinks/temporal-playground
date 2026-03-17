@@ -16,9 +16,7 @@ type DeploymentRequest struct {
 }
 
 // LandingZoneDeploymentWorkflow processes requests from a signal-driven queue.
-// Requests of the same type are processed sequentially; different types run in parallel.
-// Uses a Selector on the signal channel to dispatch to per-type Channels.
-// Runs indefinitely, using continue-as-new to bound history.
+// Requests of the same deployment module are processed sequentially; different modules run in parallel.
 func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("LandingZoneDeploymentWorkflow started")
@@ -26,56 +24,50 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	channels := map[string]workflow.Channel{}
 	signalCh := workflow.GetSignalChannel(ctx, "submit_deployment_request")
 
-	for {
-		selector := workflow.NewSelector(ctx)
-		selector.AddReceive(signalCh, func(receiveChannel workflow.ReceiveChannel, more bool) {
-			var req DeploymentRequest
-			receiveChannel.Receive(ctx, &req)
-
-			// Create a per deployment module channel and goroutine on first sight of a new type
-			if _, ok := channels[req.DeploymentModule]; !ok {
-				deploymentModule := req.DeploymentModule
-				deploymentModuleChannel := workflow.NewChannel(ctx)
-				channels[req.DeploymentModule] = deploymentModuleChannel
-				workflow.Go(ctx, func(gCtx workflow.Context) {
-					processDeploymentModule(gCtx, deploymentModule, deploymentModuleChannel)
-				})
-			}
-
-			ch := channels[req.DeploymentModule]
+	dispatch := func(req DeploymentRequest) {
+		// Spin up a per-module processor on first sight of a new module
+		if _, ok := channels[req.DeploymentModule]; !ok {
+			ch := workflow.NewChannel(ctx)
+			channels[req.DeploymentModule] = ch
+			module := req.DeploymentModule
 			workflow.Go(ctx, func(gCtx workflow.Context) {
-				ch.Send(gCtx, req.RequestID)
+				processDeploymentModule(gCtx, module, ch)
 			})
-		})
-		selector.Select(ctx)
-
-		// Guard against unbounded history growth
-		if workflow.GetInfo(ctx).GetCurrentHistoryLength() > 10_000 {
-			return workflow.NewContinueAsNewError(ctx, LandingZoneDeploymentWorkflow)
 		}
+
+		ch := channels[req.DeploymentModule]
+		r := req
+		workflow.Go(ctx, func(gCtx workflow.Context) {
+			ch.Send(gCtx, r)
+		})
+	}
+
+	for {
+		var req DeploymentRequest
+		signalCh.Receive(ctx, &req)
+		dispatch(req)
 	}
 }
 
 // processDeploymentModule sequentially processes requests for a single deployment module from the given channel.
-func processDeploymentModule(ctx workflow.Context, deploymentModule string, ch workflow.ReceiveChannel) {
+func processDeploymentModule(ctx workflow.Context, module string, ch workflow.ReceiveChannel) {
 	logger := workflow.GetLogger(ctx)
 	for {
-		var requestID string
-		ch.Receive(ctx, &requestID)
+		var req DeploymentRequest
+		ch.Receive(ctx, &req)
 
-		logger.Info("Processing request", "deploymentModule", deploymentModule, "requestID", requestID)
+		logger.Info("Processing request", "deploymentModule", module, "requestID", req.RequestID)
 
 		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, deploymentModule, requestID),
-			TaskQueue:  TaskQueue,
+			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, module, req.RequestID),
 		})
 
 		var result string
-		if err := workflow.ExecuteChildWorkflow(childCtx, DeployChangesWorkflow, DeploymentRequest{DeploymentModule: deploymentModule, RequestID: requestID}).Get(ctx, &result); err != nil {
-			logger.Error("Child workflow failed", "deploymentModule", deploymentModule, "requestID", requestID, "error", err)
-			return
+		if err := workflow.ExecuteChildWorkflow(childCtx, DeployChangesWorkflow, req).Get(ctx, &result); err != nil {
+			logger.Error("Child workflow failed", "deploymentModule", module, "requestID", req.RequestID, "error", err)
+			continue
 		}
-		logger.Info("Processed request", "deploymentModule", deploymentModule, "requestID", requestID, "result", result)
+		logger.Info("Processed request", "deploymentModule", module, "requestID", req.RequestID, "result", result)
 	}
 }
 
