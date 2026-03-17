@@ -1,13 +1,22 @@
 [tools]
-"aqua:temporalio/cli" = "1.0.0"  # Server 1.24.2 — before root_workflow_execution support
-
-[env]
-TEMPORAL_CLI_PORT = "7234"
+"aqua:temporalio/cli" = "1.0.0"  # For CLI commands (workflow start, signal, etc.)
 
 [tasks.server]
-description = "Start old temporal server (1.24.2) with persistent DB on port 7234"
-run = "temporal server start-dev --port 7234 --db-filename /tmp/temporal-repro.db --log-level warn"
+description = "Start old temporal server (1.23.0) via Docker on port 7234"
+run = "docker compose up"
+
+[tasks.server-down]
+description = "Stop the server"
+run = "docker compose down"
+
+[tasks.start-parent]
+description = "Start the parent workflow"
+run = "temporal workflow start --address localhost:7234 --task-queue child-workflows --type parentWorkflow --workflow-id parent-repro-0"
 
 [tasks.signal]
 description = "Signal parent workflow to spawn child"
 run = "temporal workflow signal --address localhost:7234 --workflow-id parent-repro-0 --name spawnChild"
+
+[tasks.clean]
+description = "Delete the shared Docker volume to start fresh"
+run = "docker volume rm temporal-repro-pgdata"
