@@ -1,0 +1,13 @@
+[tools]
+"aqua:temporalio/cli" = "1.0.0"  # Server 1.24.2 — before root_workflow_execution support
+
+[env]
+TEMPORAL_CLI_PORT = "7234"
+
+[tasks.server]
+description = "Start old temporal server (1.24.2) with persistent DB on port 7234"
+run = "temporal server start-dev --port 7234 --db-filename /tmp/temporal-repro.db --log-level warn"
+
+[tasks.signal]
+description = "Signal parent workflow to spawn child"
+run = "temporal workflow signal --address localhost:7234 --workflow-id parent-repro-0 --name spawnChild"
