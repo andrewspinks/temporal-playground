@@ -1,0 +1,113 @@
+[
+  {
+    "_index": "packets-2026-01-01",
+    "_score": null,
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.time_relative": "0.000500000",
+          "frame.number": "1"
+        },
+        "tcp": {
+          "tcp.stream": "0"
+        },
+        "http2": {
+          "http2.stream": {
+            "http2.length": "100",
+            "http2.type": "1",
+            "http2.streamid": "1",
+            "http2.header": {
+              "http2.header.name": ":path",
+              "http2.header.value": "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo",
+              "http2.request.full_uri": "http://localhost:7233/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo"
+            }
+          }
+        },
+        "grpc": {
+          "grpc.message_length": "0"
+        }
+      }
+    }
+  },
+  {
+    "_index": "packets-2026-01-01",
+    "_score": null,
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.time_relative": "0.001000000",
+          "frame.number": "2"
+        },
+        "tcp": {
+          "tcp.stream": "0"
+        },
+        "http2": {
+          "http2.stream": {
+            "http2.length": "5",
+            "http2.type": "0",
+            "http2.streamid": "1"
+          }
+        },
+        "grpc": {
+          "grpc.message_length": "0"
+        }
+      }
+    }
+  },
+  {
+    "_index": "packets-2026-01-01",
+    "_score": null,
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.time_relative": "0.002000000",
+          "frame.number": "3"
+        },
+        "tcp": {
+          "tcp.stream": "0"
+        },
+        "http2": {
+          "http2.stream": {
+            "http2.length": "50",
+            "http2.type": "0",
+            "http2.streamid": "1",
+            "http2.request_in": "2"
+          }
+        },
+        "grpc": {
+          "grpc.message_length": "32"
+        }
+      }
+    }
+  },
+  {
+    "_index": "packets-2026-01-01",
+    "_score": null,
+    "_source": {
+      "layers": {
+        "frame": {
+          "frame.time_relative": "0.100000000",
+          "frame.number": "4"
+        },
+        "tcp": {
+          "tcp.stream": "0"
+        },
+        "http2": {
+          "http2.stream": {
+            "http2.length": "200",
+            "http2.type": "0",
+            "http2.streamid": "3",
+            "http2.header": {
+              "http2.header.name": ":path",
+              "http2.header.value": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+              "http2.request.full_uri": "http://localhost:7233/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue"
+            }
+          }
+        },
+        "grpc": {
+          "grpc.message_length": "150"
+        }
+      }
+    }
+  }
+]

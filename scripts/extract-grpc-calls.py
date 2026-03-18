@@ -2,7 +2,7 @@
 """Extract gRPC calls from tshark JSON output into per-method JSON files
 with full protobuf decoding using a compiled descriptor set.
 
-Usage: python3 extract-grpc-calls.py <raw.json> <output-dir> [descriptor.binpb] [server-port]
+Usage: python3 extract-grpc-calls.py <raw.json> <output-dir> [descriptor.binpb]
 
 Produces:
   <output-dir>/001-StartWorkflowExecution-request.json
@@ -11,6 +11,7 @@ Produces:
   <output-dir>/summary.json
 """
 
+import glob
 import json
 import os
 import sys
@@ -18,8 +19,6 @@ import sys
 from google.protobuf import descriptor_pb2, descriptor_pool
 from google.protobuf.message_factory import GetMessageClass
 from google.protobuf.json_format import MessageToDict
-
-DEFAULT_SERVER_PORT = "7233"
 
 
 def load_descriptor_pool(binpb_path):
@@ -29,14 +28,12 @@ def load_descriptor_pool(binpb_path):
         fds.ParseFromString(f.read())
 
     pool = descriptor_pool.DescriptorPool()
-    # Add files in dependency order (buf build already sorts them)
     added = set()
 
     def add_file(fd_proto):
         if fd_proto.name in added:
             return
         for dep in fd_proto.dependency:
-            # Find the dep in the set
             for other in fds.file:
                 if other.name == dep:
                     add_file(other)
@@ -44,7 +41,7 @@ def load_descriptor_pool(binpb_path):
         try:
             pool.Add(fd_proto)
         except Exception:
-            pass  # already added or built-in
+            pass
         added.add(fd_proto.name)
 
     for fd_proto in fds.file:
@@ -54,7 +51,7 @@ def load_descriptor_pool(binpb_path):
 
 
 def build_method_map(pool, fds_path):
-    """Build a map of gRPC method path → (request_type, response_type)."""
+    """Build a map of gRPC method path -> (request_type, response_type)."""
     fds = descriptor_pb2.FileDescriptorSet()
     with open(fds_path, "rb") as f:
         fds.ParseFromString(f.read())
@@ -109,6 +106,28 @@ def extract_grpc_method(http2_layer):
     return search(http2_layer)
 
 
+def detect_direction(http2_stream):
+    """Detect request vs response from tshark's HTTP/2 reassembly.
+
+    tshark adds 'http2.request_in' to response frames, linking them back to the
+    request frame number. This works regardless of port numbers or proxies
+    (Docker, etc.) because it's based on HTTP/2 stream state, not network topology.
+
+    Returns 'request', 'response', or 'unknown'.
+    """
+    if not http2_stream:
+        return "unknown"
+    if http2_stream.get("http2.request_in"):
+        return "response"
+    # DATA frames (type 0) without request_in are requests.
+    # HEADERS-only frames (type 1) without request_in are request headers
+    # (the initial HEADERS frame that opens the stream).
+    frame_type = http2_stream.get("http2.type", "")
+    if frame_type in ("0", "1"):
+        return "request"
+    return "unknown"
+
+
 def main():
     if len(sys.argv) < 3:
         print(f"Usage: {sys.argv[0]} <raw.json> <output-dir> [descriptor.binpb]")
@@ -117,12 +136,10 @@ def main():
     raw_path = sys.argv[1]
     output_dir = sys.argv[2]
     binpb_path = sys.argv[3] if len(sys.argv) > 3 else None
-    server_port = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_SERVER_PORT
 
     os.makedirs(output_dir, exist_ok=True)
 
     # Clean up old numbered JSON files and summary from previous runs
-    import glob
     for old_file in glob.glob(os.path.join(output_dir, "[0-9]*.json")):
         os.remove(old_file)
     summary_file = os.path.join(output_dir, "summary.json")
@@ -140,7 +157,7 @@ def main():
     with open(raw_path) as f:
         packets = json.load(f)
 
-    # First pass: build (tcp_stream, stream_id) → method map
+    # First pass: build (tcp_stream, stream_id) -> method map
     stream_methods = {}
     for pkt in packets:
         layers = pkt["_source"]["layers"]
@@ -177,14 +194,7 @@ def main():
         if not method:
             continue
 
-        src_port = tcp.get("tcp.srcport", "")
-        dst_port = tcp.get("tcp.dstport", "")
-        if dst_port == server_port:
-            direction = "request"
-        elif src_port == server_port:
-            direction = "response"
-        else:
-            direction = "unknown"
+        direction = detect_direction(stream)
 
         parts = method.rstrip("/").split("/")
         method_name = parts[-1] if parts else method
@@ -198,8 +208,6 @@ def main():
             req_type, resp_type = method_map[method]
             type_name = req_type if direction == "request" else resp_type
             decoded = decode_protobuf(pool, type_name, raw_hex)
-
-        tcp_stream = tcp.get("tcp.stream", "")
 
         seq += 1
         call = {

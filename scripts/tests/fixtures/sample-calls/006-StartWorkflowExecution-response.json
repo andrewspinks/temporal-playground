@@ -1,0 +1,14 @@
+{
+  "seq": 6,
+  "timestamp": "0.950000000",
+  "tcp_stream": "1",
+  "stream_id": "1",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/StartWorkflowExecution",
+  "method_name": "StartWorkflowExecution",
+  "grpc_message_length": "40",
+  "payload": {
+    "run_id": "abc-123-run",
+    "started": true
+  }
+}

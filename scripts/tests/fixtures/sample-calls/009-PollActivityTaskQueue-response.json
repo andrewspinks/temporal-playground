@@ -1,0 +1,24 @@
+{
+  "seq": 9,
+  "timestamp": "2.000000000",
+  "tcp_stream": "0",
+  "stream_id": "7",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollActivityTaskQueue",
+  "method_name": "PollActivityTaskQueue",
+  "grpc_message_length": "300",
+  "payload": {
+    "activity_type": {
+      "name": "greetActivity"
+    },
+    "activity_id": "1",
+    "workflow_type": {
+      "name": "TestWorkflow"
+    },
+    "workflow_execution": {
+      "workflow_id": "test-wf-id",
+      "run_id": "abc-123-run"
+    },
+    "attempt": 1
+  }
+}

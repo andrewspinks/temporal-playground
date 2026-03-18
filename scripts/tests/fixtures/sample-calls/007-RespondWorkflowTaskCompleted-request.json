@@ -1,0 +1,19 @@
+{
+  "seq": 7,
+  "timestamp": "1.050000000",
+  "tcp_stream": "0",
+  "stream_id": "5",
+  "direction": "request",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/RespondWorkflowTaskCompleted",
+  "method_name": "RespondWorkflowTaskCompleted",
+  "grpc_message_length": "200",
+  "payload": {
+    "identity": "1234@test-host",
+    "namespace": "default",
+    "commands": [
+      {
+        "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK"
+      }
+    ]
+  }
+}

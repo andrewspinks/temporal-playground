@@ -37,7 +37,6 @@ def load_json_files(captures_dir):
     return by_seq
 
 
-
 def extract_detail(method, detail):
     """Extract a short annotation from the payload."""
     payload = (detail or {}).get("payload") or {}
@@ -65,19 +64,40 @@ def extract_detail(method, detail):
     return ""
 
 
+def detect_replay(detail):
+    """Check if a workflow task delivery is a replay."""
+    payload = (detail or {}).get("payload") or {}
+    events = payload.get("history", {}).get("events", [])
+    if not events or str(events[0].get("event_id", "0")) != "1":
+        return False
+    return any(e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED" for e in events)
+
+
 def make_participant_id(name):
     """Turn a string into a safe Mermaid participant ID."""
     return "".join(c if c.isalnum() else "_" for c in name)
+
+
+def extract_identity(payload):
+    """Extract identity from payload, handling nested locations."""
+    if not payload:
+        return ""
+    ident = payload.get("identity", "")
+    if ident:
+        return ident
+    # Nested in request.meta.identity (UpdateWorkflowExecution)
+    req = payload.get("request", {})
+    meta = req.get("meta", {})
+    return meta.get("identity", "")
 
 
 def classify_calls(summary_calls, details):
     """Classify every call into a role ('starter', 'worker', 'system') and
     assign an identity string. Returns (seq_role, seq_identity) dicts.
 
-    Uses tcp_stream to group calls by TCP connection and resolve identity for
-    calls that don't carry one (e.g. GetSystemInfo, DescribeNamespace).
-    Falls back to proximity heuristics when tcp_stream is unavailable (old
-    extract format without it).
+    Uses tcp_stream to group calls by TCP connection. All calls on the same
+    connection share an identity and role, so we build connection-level maps
+    first and then resolve each call from its connection.
     """
 
     STARTER_METHODS = {
@@ -85,133 +105,55 @@ def classify_calls(summary_calls, details):
         "GetWorkflowExecutionHistory",
     }
 
-    has_tcp_stream = any(d.get("tcp_stream") for d in details.values())
+    # Build connection-level maps: identity and role for each TCP connection
+    conn_identity = {}  # tcp_stream -> identity (first seen)
+    conn_role = {}      # tcp_stream -> "system" | "starter" | "worker"
 
-    # --- Pre-build full connection maps ---
-    # Scan ALL calls to find:
-    #   1. The identity for each TCP connection (first identity seen)
-    #   2. The role for each TCP connection (system/starter/worker)
-    conn_identity = {}    # tcp_stream -> identity (first seen)
-    conn_role = {}        # tcp_stream -> "system" | "starter" | "worker"
+    for seq in sorted(details.keys()):
+        d = details[seq]
+        tcp = d.get("tcp_stream", "")
+        if not tcp:
+            continue
+        payload = (d.get("payload") or {})
+        identity = extract_identity(payload)
+        method_name = d.get("method_name", "")
+        ns = payload.get("namespace", "")
 
-    def extract_identity(payload):
-        """Extract identity from payload, handling nested locations."""
-        if not payload:
-            return ""
-        # Top-level identity (most calls)
-        ident = payload.get("identity", "")
-        if ident:
-            return ident
-        # Nested in request.meta.identity (UpdateWorkflowExecution)
-        req = payload.get("request", {})
-        meta = req.get("meta", {})
-        return meta.get("identity", "")
+        if identity and tcp not in conn_identity:
+            conn_identity[tcp] = identity
 
-    if has_tcp_stream:
-        for seq in sorted(details.keys()):
-            d = details[seq]
-            tcp = d.get("tcp_stream", "")
-            if not tcp:
-                continue
-            payload = (d.get("payload") or {})
-            identity = extract_identity(payload)
-            method_name = d.get("method_name", "")
-            ns = payload.get("namespace", "")
+        if tcp not in conn_role:
+            conn_role[tcp] = "worker"
+        if ns == "temporal-system":
+            conn_role[tcp] = "system"
+        elif method_name in STARTER_METHODS and conn_role[tcp] != "system":
+            conn_role[tcp] = "starter"
 
-            if identity and tcp not in conn_identity:
-                conn_identity[tcp] = identity
-
-            # Determine connection role (strongest signal wins: system > starter > worker)
-            if tcp not in conn_role:
-                conn_role[tcp] = "worker"
-            if ns == "temporal-system":
-                conn_role[tcp] = "system"
-            elif method_name in STARTER_METHODS and conn_role[tcp] != "system":
-                conn_role[tcp] = "starter"
-
-    # --- Classify calls ---
-    # Map (tcp_stream, http2_stream_id) -> seq of request (for response matching)
-    stream_to_req_seq = {}
+    # Classify each call using connection-level maps
     seq_role = {}
     seq_identity = {}
 
-    def resolve_identity(detail):
-        """Get identity from payload, or from the TCP connection map."""
-        payload = (detail.get("payload") or {})
-        identity = extract_identity(payload)
-        if identity:
-            return identity
-        if has_tcp_stream:
-            tcp = detail.get("tcp_stream", "")
-            if tcp and tcp in conn_identity:
-                return conn_identity[tcp]
-        return ""
-
-    def resolve_role(detail, method):
-        """Determine role from namespace, method, and connection role."""
-        payload = (detail.get("payload") or {})
-        ns = payload.get("namespace", "")
-        if ns == "temporal-system":
-            return "system"
-        if method in STARTER_METHODS:
-            return "starter"
-        # Fall back to connection-level role
-        if has_tcp_stream:
-            tcp = detail.get("tcp_stream", "")
-            if tcp in conn_role:
-                return conn_role[tcp]
-        return "worker"
-
-    # First pass: classify all requests
     for call in summary_calls:
         seq = call["seq"]
         detail = details.get(seq, {})
         method = call["method"]
-        direction = call["direction"]
+        tcp = detail.get("tcp_stream", "")
 
-        if direction == "request":
-            tcp = detail.get("tcp_stream", "")
-            sid = detail.get("stream_id", "")
-            stream_to_req_seq[(tcp, sid)] = seq
+        # Identity: prefer payload, fall back to connection
+        payload = (detail.get("payload") or {})
+        identity = extract_identity(payload) or conn_identity.get(tcp, "")
 
-        identity = resolve_identity(detail)
-        role = resolve_role(detail, method)
+        # Role: prefer specific signals, fall back to connection
+        ns = payload.get("namespace", "")
+        if ns == "temporal-system":
+            role = "system"
+        elif method in STARTER_METHODS:
+            role = "starter"
+        else:
+            role = conn_role.get(tcp, "worker")
 
         seq_role[seq] = role
         seq_identity[seq] = identity or role
-
-    # Second pass: classify responses by matching to their request
-    for call in summary_calls:
-        seq = call["seq"]
-        if call["direction"] != "response":
-            continue
-        detail = details.get(seq, {})
-        tcp = detail.get("tcp_stream", "")
-        sid = detail.get("stream_id", "")
-        req_seq = stream_to_req_seq.get((tcp, sid))
-        if req_seq and req_seq in seq_role:
-            seq_role[seq] = seq_role[req_seq]
-            seq_identity[seq] = seq_identity[req_seq]
-        else:
-            # Fallback: use connection identity
-            identity = resolve_identity(detail)
-            role = resolve_role(detail, call["method"])
-            seq_role[seq] = role
-            seq_identity[seq] = identity or role
-
-    # Fallback for old extracts without tcp_stream: use proximity heuristic
-    # for GetSystemInfo calls
-    if not has_tcp_stream:
-        for i, call in enumerate(summary_calls):
-            seq = call["seq"]
-            if call["method"] != "GetSystemInfo":
-                continue
-            for j in range(i + 1, min(i + 3, len(summary_calls))):
-                next_seq = summary_calls[j]["seq"]
-                if seq_role.get(next_seq) == "starter":
-                    seq_role[seq] = "starter"
-                    seq_identity[seq] = seq_identity[next_seq]
-                    break
 
     return seq_role, seq_identity
 
@@ -221,8 +163,8 @@ def generate_diagram(captures_dir, raw_mode=False):
     details = load_json_files(captures_dir)
     seq_role, seq_identity = classify_calls(summary_calls, details)
     # Only use activation markers (+/-) in raw mode. In simplified mode,
-    # collapsed polls and missing responses (capture timing, proxy rewriting)
-    # make balanced activations impossible — causing Mermaid rendering errors.
+    # collapsed polls and missing responses make balanced activations
+    # impossible — causing Mermaid rendering errors.
     use_activations = raw_mode
 
     # Build participant list in order of first appearance
@@ -339,15 +281,7 @@ def generate_diagram(captures_dir, raw_mode=False):
                     pending_polls[pid][method] -= 1
                     flush_polls(body_lines, pid)
                 task_type = "workflow task" if "Workflow" in method else "activity task"
-                # Detect replay: full history (starts at event 1) with prior completed tasks
-                replay_note = ""
-                if detail and "Workflow" in method:
-                    dp = (detail.get("payload") or {})
-                    events = dp.get("history", {}).get("events", [])
-                    if events and str(events[0].get("event_id", "0")) == "1":
-                        wft_completed = sum(1 for e in events if e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED")
-                        if wft_completed > 0:
-                            replay_note = " REPLAY"
+                replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
                 body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method} ({task_type} delivered{replay_note})")
             elif is_poll:
                 if raw_mode:

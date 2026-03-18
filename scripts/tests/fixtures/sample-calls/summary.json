@@ -1,0 +1,21 @@
+{
+  "total_packets": 9,
+  "methods": [
+    "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo",
+    "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+    "/temporal.api.workflowservice.v1.WorkflowService/StartWorkflowExecution",
+    "/temporal.api.workflowservice.v1.WorkflowService/RespondWorkflowTaskCompleted",
+    "/temporal.api.workflowservice.v1.WorkflowService/PollActivityTaskQueue"
+  ],
+  "calls": [
+    {"seq": 1, "timestamp": "0.001000000", "direction": "request",  "method": "GetSystemInfo", "msg_len": "0"},
+    {"seq": 2, "timestamp": "0.002000000", "direction": "response", "method": "GetSystemInfo", "msg_len": "32"},
+    {"seq": 3, "timestamp": "0.100000000", "direction": "request",  "method": "PollWorkflowTaskQueue", "msg_len": "150"},
+    {"seq": 4, "timestamp": "1.000000000", "direction": "response", "method": "PollWorkflowTaskQueue", "msg_len": "500"},
+    {"seq": 5, "timestamp": "0.900000000", "direction": "request",  "method": "StartWorkflowExecution", "msg_len": "100"},
+    {"seq": 6, "timestamp": "0.950000000", "direction": "response", "method": "StartWorkflowExecution", "msg_len": "40"},
+    {"seq": 7, "timestamp": "1.050000000", "direction": "request",  "method": "RespondWorkflowTaskCompleted", "msg_len": "200"},
+    {"seq": 8, "timestamp": "0.110000000", "direction": "request",  "method": "PollActivityTaskQueue", "msg_len": "120"},
+    {"seq": 9, "timestamp": "2.000000000", "direction": "response", "method": "PollActivityTaskQueue", "msg_len": "300"}
+  ]
+}

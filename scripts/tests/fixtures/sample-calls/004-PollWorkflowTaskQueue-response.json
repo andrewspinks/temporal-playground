@@ -1,0 +1,39 @@
+{
+  "seq": 4,
+  "timestamp": "1.000000000",
+  "tcp_stream": "0",
+  "stream_id": "3",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "500",
+  "payload": {
+    "workflow_execution": {
+      "workflow_id": "test-wf-id",
+      "run_id": "abc-123-run"
+    },
+    "workflow_type": {
+      "name": "TestWorkflow"
+    },
+    "attempt": 1,
+    "history": {
+      "events": [
+        {
+          "event_id": "1",
+          "event_type": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+          "workflow_execution_started_event_attributes": {}
+        },
+        {
+          "event_id": "2",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+          "workflow_task_scheduled_event_attributes": {}
+        },
+        {
+          "event_id": "3",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+          "workflow_task_started_event_attributes": {}
+        }
+      ]
+    }
+  }
+}

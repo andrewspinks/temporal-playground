@@ -264,6 +264,10 @@ new-rust name="hello-world" sdk_version="0.1.0-alpha.1" rust_version="":
     echo ""
     echo "Note: first build downloads all Cargo dependencies — this may take a minute."
 
+# Run tests for gRPC analysis scripts
+test-scripts:
+    uv run --with pytest --with protobuf pytest scripts/tests/ -v
+
 # --- Wireshark/tshark gRPC inspection ---
 # Requires: brew install wireshark && brew install --cask wireshark-chmodbpf
 #
@@ -293,17 +297,17 @@ fetch-protos:
 # Capture gRPC traffic on localhost:7233 to a pcap file (Ctrl-C to stop)
 
 # Usage: just capture [name]
-capture name="default":
+capture name="default" port="7233":
     @mkdir -p captures/{{ name }}
-    tshark -i lo0 -f 'tcp port 7233' -d 'tcp.port==7233,http2' -w captures/{{ name }}/{{ name }}.pcapng
+    tshark -i lo0 -f 'tcp port {{ port }}' -d 'tcp.port=={{ port }},http2' -w captures/{{ name }}/{{ name }}.pcapng
     @echo "Capture saved to captures/{{ name }}/{{ name }}.pcapng"
 
 # Export captured gRPC calls as decoded JSON (run after stopping capture)
 
 # Usage: just export-grpc [name]
-export-grpc name="default":
+export-grpc name="default" port="7233":
     @mkdir -p captures/{{ name }}/grpc-calls
-    tshark -r captures/{{ name }}/{{ name }}.pcapng -d 'tcp.port==7233,http2' \
+    tshark -r captures/{{ name }}/{{ name }}.pcapng -d 'tcp.port=={{ port }},http2' \
         -Y 'grpc' \
         -T json \
         > captures/{{ name }}/grpc-calls/raw.json
@@ -313,8 +317,8 @@ export-grpc name="default":
 # List captured gRPC method calls (quick summary)
 
 # Usage: just capture-summary [name]
-capture-summary name="default":
-    tshark -r captures/{{ name }}/{{ name }}.pcapng -d 'tcp.port==7233,http2' \
+capture-summary name="default" port="7233":
+    tshark -r captures/{{ name }}/{{ name }}.pcapng -d 'tcp.port=={{ port }},http2' \
         -Y 'grpc' \
         -T fields -e tcp.srcport -e tcp.dstport -e http2.request.full_uri -e grpc.message_length \
         -E separator='  ' | sort | uniq -c | sort -rn
