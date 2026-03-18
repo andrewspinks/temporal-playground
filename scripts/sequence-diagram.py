@@ -220,6 +220,10 @@ def generate_diagram(captures_dir, raw_mode=False):
     summary_calls = load_summary(captures_dir)
     details = load_json_files(captures_dir)
     seq_role, seq_identity = classify_calls(summary_calls, details)
+    # Only use activation markers (+/-) in raw mode. In simplified mode,
+    # collapsed polls and missing responses (capture timing, proxy rewriting)
+    # make balanced activations impossible — causing Mermaid rendering errors.
+    use_activations = raw_mode
 
     # Build participant list in order of first appearance
     seen_participants = OrderedDict()
@@ -324,20 +328,32 @@ def generate_diagram(captures_dir, raw_mode=False):
         label = f"[{seq}] {method}: {annotation}" if annotation else f"[{seq}] {method}"
         label = label.replace('"', "'")
 
+        act = "+" if use_activations else ""
+        deact = "-" if use_activations else ""
+
         if direction == "request":
-            body_lines.append(f"    {pid}->>+Server: {label}")
+            body_lines.append(f"    {pid}->>{act}Server: {label}")
         elif direction == "response":
             if is_poll and msg_len > 0:
                 if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
                     pending_polls[pid][method] -= 1
                     flush_polls(body_lines, pid)
                 task_type = "workflow task" if "Workflow" in method else "activity task"
-                body_lines.append(f"    Server-->>-{pid}: [{seq}] {method} ({task_type} delivered)")
+                # Detect replay: full history (starts at event 1) with prior completed tasks
+                replay_note = ""
+                if detail and "Workflow" in method:
+                    dp = (detail.get("payload") or {})
+                    events = dp.get("history", {}).get("events", [])
+                    if events and str(events[0].get("event_id", "0")) == "1":
+                        wft_completed = sum(1 for e in events if e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED")
+                        if wft_completed > 0:
+                            replay_note = " REPLAY"
+                body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method} ({task_type} delivered{replay_note})")
             elif is_poll:
                 if raw_mode:
-                    body_lines.append(f"    Server-->>-{pid}: [{seq}] {method} (empty)")
+                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method} (empty)")
             else:
-                body_lines.append(f"    Server-->>-{pid}: [{seq}] {method}")
+                body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method}")
 
     if not raw_mode:
         flush_polls(body_lines)

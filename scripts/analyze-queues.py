@@ -87,11 +87,38 @@ def extract_wft_detail(payload):
     return triggers, len(triggers) > 1
 
 
+def detect_replay(payload):
+    """Detect whether a workflow task delivery requires history replay.
+
+    A replay occurs when the server delivers the full history (starting from
+    event_id 1) and there are prior WORKFLOW_TASK_COMPLETED events — the worker
+    must replay through those before processing the new events. This typically
+    happens when:
+      - The previous worker died and a new one picks up the workflow
+      - The sticky queue timed out and the task was rescheduled on the normal queue
+
+    Returns (is_replay: bool, replay_tasks: int) where replay_tasks is the
+    number of prior workflow tasks that must be replayed.
+    """
+    events = payload.get("history", {}).get("events", [])
+    if not events:
+        return False, 0
+    first_eid = events[0].get("event_id", "0")
+    if str(first_eid) != "1":
+        return False, 0
+    wft_completed = sum(
+        1 for e in events
+        if e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED"
+    )
+    return wft_completed > 0, wft_completed
+
+
 def build_task(method, payload, seq, inferred=False):
     """Build a task detail dict from a poll response payload."""
     if method == "PollWorkflowTaskQueue":
         wf = payload.get("workflow_execution", {})
         triggers, coalesced = extract_wft_detail(payload)
+        is_replay, replay_tasks = detect_replay(payload)
         return {
             "type": "Workflow",
             "seq": seq,
@@ -101,6 +128,8 @@ def build_task(method, payload, seq, inferred=False):
             "attempt": payload.get("attempt", 1),
             "triggers": triggers,
             "coalesced": coalesced,
+            "replay": is_replay,
+            "replay_tasks": replay_tasks,
             "inferred": inferred,
         }
     else:
@@ -115,6 +144,91 @@ def build_task(method, payload, seq, inferred=False):
             "attempt": payload.get("attempt", 1),
             "inferred": inferred,
         }
+
+
+def _extract_queue_from_response(payload, method):
+    """Extract (namespace, queue_name, kind, normal_name) and identity directly
+    from a poll response payload. Works for both workflow and activity task responses.
+
+    For workflow tasks: uses workflow_execution_task_queue for the NORMAL queue,
+    and extracts identity from the WORKFLOW_TASK_STARTED event in the history.
+
+    For activity tasks: uses task_queue and identity fields directly.
+    """
+    if method == "PollWorkflowTaskQueue":
+        tq = payload.get("workflow_execution_task_queue", {})
+        name = tq.get("name", "")
+        kind = tq.get("kind", "")
+        if not name:
+            return None, None
+        # Extract identity from WORKFLOW_TASK_STARTED event
+        identity = "?"
+        events = payload.get("history", {}).get("events", [])
+        for event in reversed(events):
+            if event.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_STARTED":
+                attrs = event.get("workflow_task_started_event_attributes", {})
+                identity = attrs.get("identity", "?")
+                break
+        # Get namespace from the started event
+        ns = "default"
+        for event in events:
+            if event.get("event_type") == "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED":
+                ns = event.get("workflow_execution_started_event_attributes", {}).get("namespace", "default") or "default"
+                break
+        key = (ns, name, kind, "")
+        return key, identity
+    elif method == "PollActivityTaskQueue":
+        tq = payload.get("task_queue", {})
+        name = tq.get("name", "")
+        kind = tq.get("kind", "TASK_QUEUE_KIND_NORMAL")
+        identity = payload.get("identity", "?")
+        if not name:
+            return None, None
+        key = ("default", name, kind, "")
+        return key, identity
+    return None, None
+
+
+def _try_self_attribute(call, method, payload, seq, queues, poll_requests_by_conn, workflow_to_queue):
+    """Try to attribute a poll response using its own payload or connection-level identity.
+    Returns True if attributed."""
+    tcp = call.get("tcp_stream", "")
+    conn_key = (tcp, method)
+
+    # Try extracting queue info directly from the response payload
+    key, identity = _extract_queue_from_response(payload, method)
+    if key and key[1]:
+        # Use connection-level identity if we found a matching request on this connection
+        if conn_key in poll_requests_by_conn:
+            req_key, req_identity = poll_requests_by_conn[conn_key]
+            # Use the request's queue key (has sticky info) and identity
+            queues[req_key][req_identity]["task_count"] += 1
+            queues[req_key][req_identity]["tasks"].append(build_task(method, payload, seq, inferred=True))
+            wf_id = (payload.get("workflow_execution") or {}).get("workflow_id", "")
+            if wf_id and wf_id not in ("?", ""):
+                workflow_to_queue[(wf_id, method)] = (req_key, req_identity)
+            return True
+        # No matching request on this connection — use response-extracted info
+        queues[key][identity]["task_count"] += 1
+        queues[key][identity]["tasks"].append(build_task(method, payload, seq, inferred=True))
+        wf_id = (payload.get("workflow_execution") or {}).get("workflow_id", "")
+        if wf_id and wf_id not in ("?", ""):
+            workflow_to_queue[(wf_id, method)] = (key, identity)
+        return True
+
+    # Payload doesn't contain queue info (e.g. activity task responses lack a
+    # task_queue field). Fall back to connection-level match — the same TCP
+    # connection will have poll requests that tell us the queue and identity.
+    if conn_key in poll_requests_by_conn:
+        req_key, req_identity = poll_requests_by_conn[conn_key]
+        queues[req_key][req_identity]["task_count"] += 1
+        queues[req_key][req_identity]["tasks"].append(build_task(method, payload, seq, inferred=True))
+        wf_id = (payload.get("workflow_execution") or {}).get("workflow_id", "")
+        if wf_id and wf_id not in ("?", ""):
+            workflow_to_queue[(wf_id, method)] = (req_key, req_identity)
+        return True
+
+    return False
 
 
 def analyze_queues(captures_dir):
@@ -138,6 +252,10 @@ def analyze_queues(captures_dir):
     # (WFTs go to the sticky queue; activities go to the normal queue).
     # Used to attribute responses whose request frame was not captured.
     workflow_to_queue = {}
+
+    # Index poll requests by (tcp_stream, method) so we can match identity
+    # when stream IDs don't match (e.g. Docker proxy rewrites HTTP/2 streams).
+    poll_requests_by_conn = {}  # (tcp_stream, method) -> (queue_key, identity)
 
     # Non-empty responses with no matching request, deferred for fallback attribution.
     unmatched_responses = []
@@ -164,6 +282,7 @@ def analyze_queues(captures_dir):
             tcp = call.get("tcp_stream", "")
             sid = call.get("stream_id", "")
             poll_requests_by_stream[(tcp, sid)] = (key, identity)
+            poll_requests_by_conn[(tcp, method)] = (key, identity)
 
         elif direction == "response" and method in ("PollWorkflowTaskQueue", "PollActivityTaskQueue"):
             msg_len = int(call.get("grpc_message_length", "0"))
@@ -186,7 +305,11 @@ def analyze_queues(captures_dir):
             else:
                 unmatched_responses.append(call)
 
-    # --- Attribute unmatched responses via workflow_id fallback ---
+    # --- Attribute unmatched responses ---
+    # Strategy 1: workflow_id seen in a prior matched response
+    # Strategy 2: extract queue directly from the response payload
+    #   (works when stream IDs don't match, e.g. Docker proxy)
+    # Strategy 3: fall back to connection-level identity match
     truly_unattributed = []
     for call in unmatched_responses:
         method = call.get("method_name", "")
@@ -198,6 +321,8 @@ def analyze_queues(captures_dir):
             key, identity = workflow_to_queue[(wf_id, method)]
             queues[key][identity]["task_count"] += 1
             queues[key][identity]["tasks"].append(build_task(method, payload, seq, inferred=True))
+        elif _try_self_attribute(call, method, payload, seq, queues, poll_requests_by_conn, workflow_to_queue):
+            pass  # attributed inside helper
         else:
             truly_unattributed.append(call)
 
@@ -303,10 +428,13 @@ def analyze_queues(captures_dir):
                 continue
 
             if task["type"] == "Workflow":
-                lines.append(f"- {seq_ref} **Workflow task** — `{task['workflow_type']}` attempt {task['attempt']}{inferred_note}")
+                replay_badge = " REPLAY" if task.get("replay") else ""
+                lines.append(f"- {seq_ref} **Workflow task{replay_badge}** — `{task['workflow_type']}` attempt {task['attempt']}{inferred_note}")
                 lines.append(f"  - Queue: `{queue_label}`")
                 lines.append(f"  - Workflow: `{task['workflow_id']}`")
                 lines.append(f"  - Run: `{task['run_id']}`")
+                if task.get("replay"):
+                    lines.append(f"  - Replay: full history delivered, replaying {task['replay_tasks']} prior workflow task(s)")
                 if task.get("triggers"):
                     coalesced_note = " *(coalesced into one task)*" if task.get("coalesced") else ""
                     lines.append(f"  - Triggered by: {', '.join(task['triggers'])}{coalesced_note}")

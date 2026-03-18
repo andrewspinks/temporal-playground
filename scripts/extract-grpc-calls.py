@@ -2,7 +2,7 @@
 """Extract gRPC calls from tshark JSON output into per-method JSON files
 with full protobuf decoding using a compiled descriptor set.
 
-Usage: python3 extract-grpc-calls.py <raw.json> <output-dir> [descriptor.binpb]
+Usage: python3 extract-grpc-calls.py <raw.json> <output-dir> [descriptor.binpb] [server-port]
 
 Produces:
   <output-dir>/001-StartWorkflowExecution-request.json
@@ -19,7 +19,7 @@ from google.protobuf import descriptor_pb2, descriptor_pool
 from google.protobuf.message_factory import GetMessageClass
 from google.protobuf.json_format import MessageToDict
 
-SERVER_PORT = "7233"
+DEFAULT_SERVER_PORT = "7233"
 
 
 def load_descriptor_pool(binpb_path):
@@ -117,8 +117,17 @@ def main():
     raw_path = sys.argv[1]
     output_dir = sys.argv[2]
     binpb_path = sys.argv[3] if len(sys.argv) > 3 else None
+    server_port = sys.argv[4] if len(sys.argv) > 4 else DEFAULT_SERVER_PORT
 
     os.makedirs(output_dir, exist_ok=True)
+
+    # Clean up old numbered JSON files and summary from previous runs
+    import glob
+    for old_file in glob.glob(os.path.join(output_dir, "[0-9]*.json")):
+        os.remove(old_file)
+    summary_file = os.path.join(output_dir, "summary.json")
+    if os.path.exists(summary_file):
+        os.remove(summary_file)
 
     # Load protobuf descriptors if available
     pool = None
@@ -131,16 +140,18 @@ def main():
     with open(raw_path) as f:
         packets = json.load(f)
 
-    # First pass: build stream_id → method map
+    # First pass: build (tcp_stream, stream_id) → method map
     stream_methods = {}
     for pkt in packets:
         layers = pkt["_source"]["layers"]
         http2 = layers.get("http2", {})
+        tcp = layers.get("tcp", {})
         stream = http2.get("http2.stream", {})
         stream_id = stream.get("http2.streamid")
+        tcp_stream = tcp.get("tcp.stream", "")
         method = extract_grpc_method(http2)
         if stream_id and method:
-            stream_methods[stream_id] = method
+            stream_methods[(tcp_stream, stream_id)] = method
 
     # Second pass: extract all gRPC packets with decoded payloads
     calls = []
@@ -161,15 +172,16 @@ def main():
         if msg_len == "0" and frame_type == "1":
             continue
 
-        method = extract_grpc_method(http2) or stream_methods.get(stream_id)
+        tcp_stream = tcp.get("tcp.stream", "")
+        method = extract_grpc_method(http2) or stream_methods.get((tcp_stream, stream_id))
         if not method:
             continue
 
         src_port = tcp.get("tcp.srcport", "")
         dst_port = tcp.get("tcp.dstport", "")
-        if dst_port == SERVER_PORT:
+        if dst_port == server_port:
             direction = "request"
-        elif src_port == SERVER_PORT:
+        elif src_port == server_port:
             direction = "response"
         else:
             direction = "unknown"
