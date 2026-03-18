@@ -16,7 +16,7 @@ type DeploymentRequest struct {
 }
 
 // LandingZoneDeploymentWorkflow processes requests from a signal-driven queue.
-// Requests of the same deployment module are processed sequentially; different modules run in parallel.
+// Requests of the same DeploymentModule are processed sequentially; different modules run in parallel.
 func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("LandingZoneDeploymentWorkflow started")
@@ -25,7 +25,7 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	signalCh := workflow.GetSignalChannel(ctx, "submit_deployment_request")
 
 	dispatch := func(req DeploymentRequest) {
-		// Spin up a per-module processor on first sight of a new module
+		// Spin up a per-module channel on first sight of a new DeploymentModule
 		if _, ok := channels[req.DeploymentModule]; !ok {
 			ch := workflow.NewChannel(ctx)
 			channels[req.DeploymentModule] = ch
@@ -45,6 +45,8 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	for {
 		var req DeploymentRequest
 		signalCh.Receive(ctx, &req)
+		// for sliding expiry.
+		// signalCh.ReceiveWithTimeout(ctx, 5*time.Minute, &req)
 		dispatch(req)
 	}
 }

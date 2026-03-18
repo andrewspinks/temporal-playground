@@ -43,7 +43,7 @@ func main() {
 		}
 
 		// SignalWithStartWorkflow atomically starts the scheduler workflow (if not
-		// already running) and sends the submit_request signal with the request.
+		// already running) and sends the submit_deployment_request signal with the request.
 		_, err := c.SignalWithStartWorkflow(
 			r.Context(),
 			req.LZ_ID,                   // workflow ID

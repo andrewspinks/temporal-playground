@@ -11,7 +11,6 @@ import (
 )
 
 func main() {
-	// Connection is configured via environment variables — see CLAUDE.md for details.
 	c, err := client.Dial(envconfig.MustLoadDefaultClientOptions())
 	if err != nil {
 		log.Fatalln("Unable to create client", err)
