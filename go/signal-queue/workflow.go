@@ -46,7 +46,11 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 		var req DeploymentRequest
 		signalCh.Receive(ctx, &req)
 		// for sliding expiry.
-		// signalCh.ReceiveWithTimeout(ctx, 5*time.Minute, &req)
+		// ok, _ := signalCh.ReceiveWithTimeout(ctx, 1*time.Minute, &req)
+		// if !ok {
+		// 	   logger.Info("No new requests for 5 minutes, exiting")
+		//     return nil
+		// }
 		dispatch(req)
 	}
 }
