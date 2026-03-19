@@ -1,0 +1,178 @@
+{
+  "seq": 11,
+  "timestamp": "19.046943000",
+  "tcp_stream": "0",
+  "stream_id": "3",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "1183",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESBGx6LTcaJGE4NzQ1ODIwLTQyZTktNDg3OC04Njk4LTE5ZGU2MzkzNWIwOCAKKAFKCQgBEOOCwAIYAVALYgwIoYDuzQYQteusygI=",
+    "workflow_execution": {
+      "workflow_id": "lz-7",
+      "run_id": "a8745820-42e9-4878-8698-19de63935b08"
+    },
+    "workflow_type": {
+      "name": "LandingZoneDeploymentWorkflow"
+    },
+    "previous_started_event_id": "4",
+    "started_event_id": "11",
+    "attempt": 1,
+    "history": {
+      "events": [
+        {
+          "event_id": "5",
+          "event_time": "2026-03-19T04:48:33.680392638Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_COMPLETED",
+          "task_id": "5243218",
+          "workflow_task_completed_event_attributes": {
+            "scheduled_event_id": "3",
+            "started_event_id": "4",
+            "identity": "13676@MacBook-Pro-4.local@",
+            "worker_version": {
+              "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+            },
+            "sdk_metadata": {
+              "lang_used_flags": [
+                3
+              ],
+              "sdk_name": "temporal-go",
+              "sdk_version": "1.41.0"
+            },
+            "metering_metadata": {}
+          }
+        },
+        {
+          "event_id": "6",
+          "event_time": "2026-03-19T04:48:33.681280555Z",
+          "event_type": "EVENT_TYPE_TIMER_STARTED",
+          "task_id": "5243219",
+          "timer_started_event_attributes": {
+            "timer_id": "6",
+            "start_to_fire_timeout": "60s",
+            "workflow_task_completed_event_id": "5"
+          },
+          "user_metadata": {
+            "summary": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "IkF3YWl0V2l0aFRpbWVvdXQi"
+            }
+          }
+        },
+        {
+          "event_id": "7",
+          "event_time": "2026-03-19T04:48:33.681291430Z",
+          "event_type": "EVENT_TYPE_TIMER_STARTED",
+          "task_id": "5243220",
+          "timer_started_event_attributes": {
+            "timer_id": "7",
+            "start_to_fire_timeout": "60s",
+            "workflow_task_completed_event_id": "5"
+          },
+          "user_metadata": {
+            "summary": {
+              "metadata": {
+                "encoding": "anNvbi9wbGFpbg=="
+              },
+              "data": "IkF3YWl0V2l0aFRpbWVvdXQi"
+            }
+          }
+        },
+        {
+          "event_id": "8",
+          "event_time": "2026-03-19T04:48:33.681321597Z",
+          "event_type": "EVENT_TYPE_START_CHILD_WORKFLOW_EXECUTION_INITIATED",
+          "task_id": "5243221",
+          "start_child_workflow_execution_initiated_event_attributes": {
+            "namespace": "default",
+            "workflow_id": "lz-7-vpc-req-1",
+            "workflow_type": {
+              "name": "DeployChangesWorkflow"
+            },
+            "task_queue": {
+              "name": "signal-queue",
+              "kind": "TASK_QUEUE_KIND_NORMAL"
+            },
+            "input": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "eyJyZXF1ZXN0X2lkIjoicmVxLTEiLCJkZXBsb3ltZW50bW9kdWxlIjoidnBjIn0="
+                }
+              ]
+            },
+            "workflow_execution_timeout": "0s",
+            "workflow_run_timeout": "0s",
+            "workflow_task_timeout": "10s",
+            "parent_close_policy": "PARENT_CLOSE_POLICY_TERMINATE",
+            "workflow_task_completed_event_id": "5",
+            "workflow_id_reuse_policy": "WORKFLOW_ID_REUSE_POLICY_ALLOW_DUPLICATE",
+            "header": {},
+            "namespace_id": "53eed87b-42af-497b-a450-dc2123235ab1",
+            "inherit_build_id": true
+          }
+        },
+        {
+          "event_id": "9",
+          "event_time": "2026-03-19T04:48:33.687933347Z",
+          "event_type": "EVENT_TYPE_CHILD_WORKFLOW_EXECUTION_STARTED",
+          "task_id": "5243226",
+          "child_workflow_execution_started_event_attributes": {
+            "namespace": "default",
+            "initiated_event_id": "8",
+            "workflow_execution": {
+              "workflow_id": "lz-7-vpc-req-1",
+              "run_id": "019d046c-8394-7cda-b806-9c3342f2de99"
+            },
+            "workflow_type": {
+              "name": "DeployChangesWorkflow"
+            },
+            "header": {},
+            "namespace_id": "53eed87b-42af-497b-a450-dc2123235ab1"
+          }
+        },
+        {
+          "event_id": "10",
+          "event_time": "2026-03-19T04:48:33.687938638Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+          "task_id": "5243227",
+          "workflow_task_scheduled_event_attributes": {
+            "task_queue": {
+              "name": "MacBook-Pro-4.local:214a46d6-97bc-4d66-9923-d52ce0acc103",
+              "kind": "TASK_QUEUE_KIND_STICKY",
+              "normal_name": "signal-queue"
+            },
+            "start_to_close_timeout": "10s",
+            "attempt": 1
+          }
+        },
+        {
+          "event_id": "11",
+          "event_time": "2026-03-19T04:48:33.692794805Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+          "task_id": "5243232",
+          "workflow_task_started_event_attributes": {
+            "scheduled_event_id": "10",
+            "identity": "13676@MacBook-Pro-4.local@",
+            "request_id": "353841bc-57e9-471b-b581-11cd0adeff83",
+            "history_size_bytes": "1358",
+            "worker_version": {
+              "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+            }
+          }
+        }
+      ]
+    },
+    "workflow_execution_task_queue": {
+      "name": "signal-queue",
+      "kind": "TASK_QUEUE_KIND_NORMAL"
+    },
+    "scheduled_time": "2026-03-19T04:48:33.687938638Z",
+    "started_time": "2026-03-19T04:48:33.692794805Z"
+  }
+}

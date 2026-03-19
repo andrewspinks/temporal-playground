@@ -1,0 +1,26 @@
+{
+  "seq": 19,
+  "timestamp": "25.677071000",
+  "tcp_stream": "0",
+  "stream_id": "13",
+  "direction": "request",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/RespondQueryTaskCompleted",
+  "method_name": "RespondQueryTaskCompleted",
+  "grpc_message_length": "597",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESOE1hY0Jvb2stUHJvLTQubG9jYWw6MjE0YTQ2ZDYtOTdiYy00ZDY2LTk5MjMtZDUyY2UwYWNjMTAzGiRhNWJkZTM3Ni01MWU1LTRlMjgtODQ4ZC1iNzlkMTViMDllYTg=",
+    "completed_type": "QUERY_RESULT_TYPE_ANSWERED",
+    "query_result": {
+      "payloads": [
+        {
+          "metadata": {
+            "encoding": "anNvbi9wcm90b2J1Zg==",
+            "messageType": "dGVtcG9yYWwuYXBpLnNkay52MS5Xb3JrZmxvd01ldGFkYXRh"
+          },
+          "data": "eyJkZWZpbml0aW9uIjp7InR5cGUiOiJMYW5kaW5nWm9uZURlcGxveW1lbnRXb3JrZmxvdyIsICJxdWVyeURlZmluaXRpb25zIjpbeyJuYW1lIjoiX19vcGVuX3Nlc3Npb25zIiwgImRlc2NyaXB0aW9uIjoiT3BlbiBzZXNzaW9ucyBvbiB0aGUgd29ya2Zsb3cifSwgeyJuYW1lIjoiX19zdGFja190cmFjZSIsICJkZXNjcmlwdGlvbiI6IkN1cnJlbnQgc3RhY2sgdHJhY2UifSwgeyJuYW1lIjoiX190ZW1wb3JhbF93b3JrZmxvd19tZXRhZGF0YSIsICJkZXNjcmlwdGlvbiI6Ik1ldGFkYXRhIGFib3V0IHRoZSB3b3JrZmxvdyJ9XSwgInNpZ25hbERlZmluaXRpb25zIjpbeyJuYW1lIjoic3VibWl0X2RlcGxveW1lbnRfcmVxdWVzdCJ9XX19"
+        }
+      ]
+    },
+    "namespace": "default"
+  }
+}

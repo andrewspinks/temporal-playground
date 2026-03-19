@@ -1,0 +1,106 @@
+{
+  "seq": 14,
+  "timestamp": "19.049619000",
+  "tcp_stream": "1",
+  "stream_id": "7",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "848",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESDmx6LTctdnBjLXJlcS0xGiQwMTlkMDQ2Yy04Mzk0LTdjZGEtYjgwNi05YzMzNDJmMmRlOTkgAigBSgkIAhDIgMACGAFQA2IMCKGA7s0GEPeAl8sC",
+    "workflow_execution": {
+      "workflow_id": "lz-7-vpc-req-1",
+      "run_id": "019d046c-8394-7cda-b806-9c3342f2de99"
+    },
+    "workflow_type": {
+      "name": "DeployChangesWorkflow"
+    },
+    "started_event_id": "3",
+    "attempt": 1,
+    "history": {
+      "events": [
+        {
+          "event_id": "1",
+          "event_time": "2026-03-19T04:48:33.684843013Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED",
+          "task_id": "5242942",
+          "workflow_execution_started_event_attributes": {
+            "workflow_type": {
+              "name": "DeployChangesWorkflow"
+            },
+            "parent_workflow_namespace": "default",
+            "parent_workflow_execution": {
+              "workflow_id": "lz-7",
+              "run_id": "a8745820-42e9-4878-8698-19de63935b08"
+            },
+            "parent_initiated_event_id": "8",
+            "task_queue": {
+              "name": "signal-queue",
+              "kind": "TASK_QUEUE_KIND_NORMAL"
+            },
+            "input": {
+              "payloads": [
+                {
+                  "metadata": {
+                    "encoding": "anNvbi9wbGFpbg=="
+                  },
+                  "data": "eyJyZXF1ZXN0X2lkIjoicmVxLTEiLCJkZXBsb3ltZW50bW9kdWxlIjoidnBjIn0="
+                }
+              ]
+            },
+            "workflow_execution_timeout": "0s",
+            "workflow_run_timeout": "0s",
+            "workflow_task_timeout": "10s",
+            "original_execution_run_id": "019d046c-8394-7cda-b806-9c3342f2de99",
+            "first_execution_run_id": "019d046c-8394-7cda-b806-9c3342f2de99",
+            "attempt": 1,
+            "first_workflow_task_backoff": "0s",
+            "header": {},
+            "parent_workflow_namespace_id": "53eed87b-42af-497b-a450-dc2123235ab1",
+            "workflow_id": "lz-7-vpc-req-1",
+            "root_workflow_execution": {
+              "workflow_id": "lz-7",
+              "run_id": "a8745820-42e9-4878-8698-19de63935b08"
+            }
+          }
+        },
+        {
+          "event_id": "2",
+          "event_time": "2026-03-19T04:48:33.692262388Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED",
+          "task_id": "5242946",
+          "workflow_task_scheduled_event_attributes": {
+            "task_queue": {
+              "name": "signal-queue",
+              "kind": "TASK_QUEUE_KIND_NORMAL"
+            },
+            "start_to_close_timeout": "10s",
+            "attempt": 1
+          }
+        },
+        {
+          "event_id": "3",
+          "event_time": "2026-03-19T04:48:33.694534263Z",
+          "event_type": "EVENT_TYPE_WORKFLOW_TASK_STARTED",
+          "task_id": "5242949",
+          "workflow_task_started_event_attributes": {
+            "scheduled_event_id": "2",
+            "identity": "13676@MacBook-Pro-4.local@",
+            "request_id": "d71e88d9-748c-4f3d-b0d8-3326bb329fac",
+            "history_size_bytes": "454",
+            "worker_version": {
+              "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+            }
+          }
+        }
+      ]
+    },
+    "workflow_execution_task_queue": {
+      "name": "signal-queue",
+      "kind": "TASK_QUEUE_KIND_NORMAL"
+    },
+    "scheduled_time": "2026-03-19T04:48:33.692262388Z",
+    "started_time": "2026-03-19T04:48:33.694534263Z"
+  }
+}

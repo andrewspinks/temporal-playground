@@ -1,0 +1,46 @@
+{
+  "seq": 4,
+  "timestamp": "0.057892000",
+  "tcp_stream": "0",
+  "stream_id": "1",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/DescribeNamespace",
+  "method_name": "DescribeNamespace",
+  "grpc_message_length": "342",
+  "payload": {
+    "namespace_info": {
+      "name": "default",
+      "state": "NAMESPACE_STATE_REGISTERED",
+      "description": "Default namespace for Temporal Server.",
+      "id": "53eed87b-42af-497b-a450-dc2123235ab1",
+      "capabilities": {
+        "sync_update": true,
+        "async_update": true
+      },
+      "supports_schedules": true
+    },
+    "config": {
+      "workflow_execution_retention_ttl": "86400s",
+      "bad_binaries": {},
+      "history_archival_state": "ARCHIVAL_STATE_DISABLED",
+      "visibility_archival_state": "ARCHIVAL_STATE_DISABLED",
+      "custom_search_attribute_aliases": {
+        "Bool02": "CustomBoolField",
+        "Text03": "CustomTextField",
+        "Int03": "CustomIntField",
+        "Text01": "CustomStringField",
+        "Keyword10": "CustomKeywordField",
+        "Double02": "CustomDoubleField",
+        "Datetime03": "CustomDatetimeField"
+      }
+    },
+    "replication_config": {
+      "active_cluster_name": "active",
+      "clusters": [
+        {
+          "cluster_name": "active"
+        }
+      ]
+    }
+  }
+}

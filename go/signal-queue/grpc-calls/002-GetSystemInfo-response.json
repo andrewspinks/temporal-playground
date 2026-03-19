@@ -1,0 +1,26 @@
+{
+  "seq": 2,
+  "timestamp": "0.011418000",
+  "tcp_stream": "1",
+  "stream_id": "1",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/GetSystemInfo",
+  "method_name": "GetSystemInfo",
+  "grpc_message_length": "32",
+  "payload": {
+    "server_version": "1.27.1",
+    "capabilities": {
+      "signal_and_query_header": true,
+      "internal_error_differentiation": true,
+      "activity_failure_include_heartbeat": true,
+      "supports_schedules": true,
+      "encoded_failure_attributes": true,
+      "build_id_based_versioning": true,
+      "upsert_memo": true,
+      "eager_workflow_start": true,
+      "sdk_metadata": true,
+      "count_group_by_execution_status": true,
+      "nexus": true
+    }
+  }
+}

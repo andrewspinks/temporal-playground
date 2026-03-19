@@ -1,0 +1,35 @@
+{
+  "seq": 13,
+  "timestamp": "19.047438000",
+  "tcp_stream": "0",
+  "stream_id": "9",
+  "direction": "request",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/RespondWorkflowTaskCompleted",
+  "method_name": "RespondWorkflowTaskCompleted",
+  "grpc_message_length": "316",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESBGx6LTcaJGE4NzQ1ODIwLTQyZTktNDg3OC04Njk4LTE5ZGU2MzkzNWIwOCAKKAFKCQgBEOOCwAIYAVALYgwIoYDuzQYQteusygI=",
+    "identity": "13676@MacBook-Pro-4.local@",
+    "sticky_attributes": {
+      "worker_task_queue": {
+        "name": "MacBook-Pro-4.local:214a46d6-97bc-4d66-9923-d52ce0acc103",
+        "kind": "TASK_QUEUE_KIND_STICKY",
+        "normal_name": "signal-queue"
+      },
+      "schedule_to_start_timeout": "5s"
+    },
+    "return_new_workflow_task": true,
+    "namespace": "default",
+    "worker_version_stamp": {
+      "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+    },
+    "sdk_metadata": {},
+    "metering_metadata": {},
+    "capabilities": {
+      "discard_speculative_workflow_task_with_events": true
+    },
+    "deployment": {
+      "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+    }
+  }
+}

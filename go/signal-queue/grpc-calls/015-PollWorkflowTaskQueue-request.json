@@ -1,0 +1,22 @@
+{
+  "seq": 15,
+  "timestamp": "19.049823000",
+  "tcp_stream": "1",
+  "stream_id": "11",
+  "direction": "request",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "129",
+  "payload": {
+    "namespace": "default",
+    "task_queue": {
+      "name": "signal-queue",
+      "kind": "TASK_QUEUE_KIND_NORMAL"
+    },
+    "identity": "13676@MacBook-Pro-4.local@",
+    "worker_version_capabilities": {
+      "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+    },
+    "worker_instance_key": "14961c70-3804-46e6-a732-e32c2e7545e0"
+  }
+}

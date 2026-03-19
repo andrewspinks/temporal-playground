@@ -1,0 +1,30 @@
+{
+  "seq": 17,
+  "timestamp": "25.676352000",
+  "tcp_stream": "1",
+  "stream_id": "9",
+  "direction": "response",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/PollWorkflowTaskQueue",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "272",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESOE1hY0Jvb2stUHJvLTQubG9jYWw6MjE0YTQ2ZDYtOTdiYy00ZDY2LTk5MjMtZDUyY2UwYWNjMTAzGiRhNWJkZTM3Ni01MWU1LTRlMjgtODQ4ZC1iNzlkMTViMDllYTg=",
+    "workflow_execution": {
+      "workflow_id": "lz-7",
+      "run_id": "a8745820-42e9-4878-8698-19de63935b08"
+    },
+    "workflow_type": {
+      "name": "LandingZoneDeploymentWorkflow"
+    },
+    "previous_started_event_id": "11",
+    "attempt": 1,
+    "history": {},
+    "query": {
+      "query_type": "__temporal_workflow_metadata"
+    },
+    "workflow_execution_task_queue": {
+      "name": "signal-queue",
+      "kind": "TASK_QUEUE_KIND_NORMAL"
+    }
+  }
+}

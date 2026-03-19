@@ -1,0 +1,58 @@
+{
+  "seq": 16,
+  "timestamp": "19.049985000",
+  "tcp_stream": "0",
+  "stream_id": "11",
+  "direction": "request",
+  "method": "/temporal.api.workflowservice.v1.WorkflowService/RespondWorkflowTaskCompleted",
+  "method_name": "RespondWorkflowTaskCompleted",
+  "grpc_message_length": "401",
+  "payload": {
+    "task_token": "CiQ1M2VlZDg3Yi00MmFmLTQ5N2ItYTQ1MC1kYzIxMjMyMzVhYjESDmx6LTctdnBjLXJlcS0xGiQwMTlkMDQ2Yy04Mzk0LTdjZGEtYjgwNi05YzMzNDJmMmRlOTkgAigBSgkIAhDIgMACGAFQA2IMCKGA7s0GEPeAl8sC",
+    "commands": [
+      {
+        "command_type": "COMMAND_TYPE_START_TIMER",
+        "start_timer_command_attributes": {
+          "timer_id": "5",
+          "start_to_fire_timeout": "15s"
+        },
+        "user_metadata": {
+          "summary": {
+            "metadata": {
+              "encoding": "anNvbi9wbGFpbg=="
+            },
+            "data": "IlNsZWVwIg=="
+          }
+        }
+      }
+    ],
+    "identity": "13676@MacBook-Pro-4.local@",
+    "sticky_attributes": {
+      "worker_task_queue": {
+        "name": "MacBook-Pro-4.local:214a46d6-97bc-4d66-9923-d52ce0acc103",
+        "kind": "TASK_QUEUE_KIND_STICKY",
+        "normal_name": "signal-queue"
+      },
+      "schedule_to_start_timeout": "5s"
+    },
+    "return_new_workflow_task": true,
+    "namespace": "default",
+    "worker_version_stamp": {
+      "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+    },
+    "sdk_metadata": {
+      "lang_used_flags": [
+        3
+      ],
+      "sdk_name": "temporal-go",
+      "sdk_version": "1.41.0"
+    },
+    "metering_metadata": {},
+    "capabilities": {
+      "discard_speculative_workflow_task_with_events": true
+    },
+    "deployment": {
+      "build_id": "848e88ef9c701a2fd02005ae74ccec75"
+    }
+  }
+}
