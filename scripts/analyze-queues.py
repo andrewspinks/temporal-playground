@@ -12,8 +12,8 @@ Usage: python3 scripts/analyze-queues.py [captures-dir]
   Default captures-dir: captures/grpc-calls
 """
 
-import json
 import glob
+import json
 import os
 import sys
 from collections import defaultdict
@@ -104,8 +104,7 @@ def detect_replay(payload):
     if str(first_eid) != "1":
         return False, 0
     wft_completed = sum(
-        1 for e in events
-        if e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED"
+        1 for e in events if e.get("event_type") == "EVENT_TYPE_WORKFLOW_TASK_COMPLETED"
     )
     return wft_completed > 0, wft_completed
 
@@ -146,12 +145,16 @@ def analyze_queues(captures_dir):
 
     # Key: (namespace, queue_name, kind, normal_name)
     # Value per identity: { poll_types, poll_count, task_count, tasks: [] }
-    queues = defaultdict(lambda: defaultdict(lambda: {
-        "poll_types": set(),
-        "poll_count": 0,
-        "task_count": 0,
-        "tasks": [],
-    }))
+    queues = defaultdict(
+        lambda: defaultdict(
+            lambda: {
+                "poll_types": set(),
+                "poll_count": 0,
+                "task_count": 0,
+                "tasks": [],
+            }
+        )
+    )
 
     # Connection-level map: (tcp_stream, method) -> (queue_key, identity).
     # All polls on the same TCP connection share a queue and identity,
@@ -165,7 +168,10 @@ def analyze_queues(captures_dir):
         seq = call.get("seq")
         tcp = call.get("tcp_stream", "")
 
-        if direction == "request" and method in ("PollWorkflowTaskQueue", "PollActivityTaskQueue"):
+        if direction == "request" and method in (
+            "PollWorkflowTaskQueue",
+            "PollActivityTaskQueue",
+        ):
             tq = payload.get("task_queue", {})
             ns = payload.get("namespace", "?")
             name = tq.get("name", "?")
@@ -179,7 +185,10 @@ def analyze_queues(captures_dir):
             queues[key][identity]["poll_count"] += 1
             conn_queue[(tcp, method)] = (key, identity)
 
-        elif direction == "response" and method in ("PollWorkflowTaskQueue", "PollActivityTaskQueue"):
+        elif direction == "response" and method in (
+            "PollWorkflowTaskQueue",
+            "PollActivityTaskQueue",
+        ):
             msg_len = int(call.get("grpc_message_length", "0"))
             if msg_len == 0:
                 continue
@@ -200,7 +209,9 @@ def analyze_queues(captures_dir):
         queue_label = f"{name} ({kind_short})"
         for identity, info in identities.items():
             for task in info["tasks"]:
-                all_tasks_flat.append((task.get("seq") or 0, queue_label, identity, task))
+                all_tasks_flat.append(
+                    (task.get("seq") or 0, queue_label, identity, task)
+                )
 
     all_tasks_flat.sort(key=lambda x: x[0])
 
@@ -236,7 +247,7 @@ def analyze_queues(captures_dir):
             task_status = f"**yes** ({total_tasks})" if total_tasks > 0 else "no"
             sticky_note = f" *(sticky for: {normal})*" if normal else ""
 
-            lines.append(f"### `{name}`")
+            lines.append(f"### `Queue: {name}`")
             lines.append("")
             lines.append(f"| | |")
             lines.append(f"|---|---|")
@@ -255,7 +266,9 @@ def analyze_queues(captures_dir):
                     w_types = " + ".join(sorted(info["poll_types"]))
                     w_tasks = info["task_count"]
                     suffix = f", got {w_tasks} tasks" if w_tasks > 0 else ""
-                    worker_lines.append(f"`{identity}` ({w_types}, {info['poll_count']} polls{suffix})")
+                    worker_lines.append(
+                        f"`{identity}` ({w_types}, {info['poll_count']} polls{suffix})"
+                    )
                 lines.append(f"| Workers | {'<br>'.join(worker_lines)} |")
 
             lines.append("")
@@ -275,20 +288,30 @@ def analyze_queues(captures_dir):
 
             if task["type"] == "Workflow":
                 replay_badge = " REPLAY" if task.get("replay") else ""
-                lines.append(f"- {seq_ref} **Workflow task{replay_badge}** — `{task['workflow_type']}` attempt {task['attempt']}")
+                lines.append(
+                    f"- {seq_ref} **Workflow task{replay_badge}** — `{task['workflow_type']}` attempt {task['attempt']}"
+                )
                 lines.append(f"  - Queue: `{queue_label}`")
                 lines.append(f"  - Workflow: `{task['workflow_id']}`")
                 lines.append(f"  - Run: `{task['run_id']}`")
                 if task.get("replay"):
-                    lines.append(f"  - Replay: full history delivered, replaying {task['replay_tasks']} prior workflow task(s)")
+                    lines.append(
+                        f"  - Replay: full history delivered, replaying {task['replay_tasks']} prior workflow task(s)"
+                    )
                 if task.get("triggers"):
-                    coalesced_note = " *(coalesced into one task)*" if task.get("coalesced") else ""
-                    lines.append(f"  - Triggered by: {', '.join(task['triggers'])}{coalesced_note}")
+                    coalesced_note = " *(coalesced)*" if task.get("coalesced") else ""
+                    lines.append(
+                        f"  - Events: {', '.join(task['triggers'])}{coalesced_note}"
+                    )
                 lines.append(f"  - Delivered to: `{identity}`")
             else:
-                lines.append(f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}")
+                lines.append(
+                    f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}"
+                )
                 lines.append(f"  - Queue: `{queue_label}`")
-                lines.append(f"  - Workflow: `{task['workflow_type']}` / `{task['workflow_id']}`")
+                lines.append(
+                    f"  - Workflow: `{task['workflow_type']}` / `{task['workflow_id']}`"
+                )
                 lines.append(f"  - Delivered to: `{identity}`")
             lines.append("")
 
