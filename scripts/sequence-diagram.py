@@ -6,9 +6,10 @@ Supports multiple workers — each unique identity becomes its own participant.
 Uses tcp_stream (TCP connection ID) to correlate identity-less calls (like
 GetSystemInfo) with the worker/starter that owns that connection.
 
-Usage: python3 scripts/sequence-diagram.py [captures-dir] [--raw]
+Usage: python3 scripts/sequence-diagram.py [captures-dir] [--raw] [--services]
   Default captures-dir: captures/grpc-calls
   --raw: include all polling (no simplification)
+  --services: show internal service routing (Frontend→History/Matching/Visibility)
 """
 
 import json
@@ -35,6 +36,170 @@ def load_json_files(captures_dir):
             data = json.load(fh)
             by_seq[data["seq"]] = data
     return by_seq
+
+
+# API priority mappings from temporal/service/frontend/configs/quotas.go
+# Keys are short method names (without the full gRPC service path).
+# Prefix: E = Execution, V = Visibility, NR = NamespaceReplication
+API_PRIORITY = {
+    # Execution P0: System
+    "GetClusterInfo": "E0", "GetSystemInfo": "E0", "GetSearchAttributes": "E0",
+    "DescribeNamespace": "E0", "ListNamespaces": "E0", "DeprecateNamespace": "E0",
+    # Execution P1: External events + progress (completions/heartbeats)
+    "SignalWorkflowExecution": "E1", "SignalWithStartWorkflowExecution": "E1",
+    "StartWorkflowExecution": "E1", "UpdateWorkflowExecution": "E1",
+    "ExecuteMultiOperation": "E1", "CreateSchedule": "E1",
+    "StartBatchOperation": "E1", "StartActivityExecution": "E1",
+    "RecordActivityTaskHeartbeat": "E1", "RecordActivityTaskHeartbeatById": "E1",
+    "RespondActivityTaskCompleted": "E1", "RespondActivityTaskCompletedById": "E1",
+    "RespondWorkflowTaskCompleted": "E1", "RespondQueryTaskCompleted": "E1",
+    "RespondNexusTaskCompleted": "E1",
+    # Execution P2: State changes
+    "RequestCancelWorkflowExecution": "E2", "TerminateWorkflowExecution": "E2",
+    "ResetWorkflowExecution": "E2", "DeleteWorkflowExecution": "E2",
+    "GetWorkflowExecutionHistory": "E2", "UpdateSchedule": "E2",
+    "PatchSchedule": "E2", "DeleteSchedule": "E2", "StopBatchOperation": "E2",
+    "UpdateActivityOptions": "E2", "PauseActivity": "E2", "UnpauseActivity": "E2",
+    "ResetActivity": "E2", "UpdateWorkflowExecutionOptions": "E2",
+    "SetCurrentDeployment": "E2", "SetCurrentDeploymentVersion": "E2",
+    "SetWorkerDeploymentCurrentVersion": "E2", "SetWorkerDeploymentRampingVersion": "E2",
+    "SetWorkerDeploymentManager": "E2", "DeleteWorkerDeployment": "E2",
+    "DeleteWorkerDeploymentVersion": "E2", "UpdateWorkerDeploymentVersionMetadata": "E2",
+    "CreateWorkflowRule": "E2", "DescribeWorkflowRule": "E2",
+    "DeleteWorkflowRule": "E2", "ListWorkflowRules": "E2", "TriggerWorkflowRule": "E2",
+    "UpdateTaskQueueConfig": "E2", "RequestCancelActivityExecution": "E2",
+    "TerminateActivityExecution": "E2", "DeleteActivityExecution": "E2",
+    "PauseWorkflowExecution": "E2", "UnpauseWorkflowExecution": "E2",
+    # Execution P3: Status queries + failure/cancel responses
+    "DescribeWorkflowExecution": "E3", "DescribeActivityExecution": "E3",
+    "DescribeTaskQueue": "E3", "GetWorkerBuildIdCompatibility": "E3",
+    "GetWorkerVersioningRules": "E3", "ListTaskQueuePartitions": "E3",
+    "QueryWorkflow": "E3", "DescribeSchedule": "E3", "ListScheduleMatchingTimes": "E3",
+    "DescribeBatchOperation": "E3", "DescribeDeployment": "E3",
+    "GetCurrentDeployment": "E3", "DescribeWorkerDeploymentVersion": "E3",
+    "DescribeWorkerDeployment": "E3",
+    "RespondActivityTaskCanceled": "E3", "RespondActivityTaskCanceledById": "E3",
+    "RespondActivityTaskFailed": "E3", "RespondActivityTaskFailedById": "E3",
+    "RespondWorkflowTaskFailed": "E3", "RespondNexusTaskFailed": "E3",
+    # Execution P4: Polls + low priority
+    "PollActivityExecution": "E4", "PollWorkflowTaskQueue": "E4",
+    "PollActivityTaskQueue": "E4", "PollWorkflowExecutionUpdate": "E4",
+    "PollNexusTaskQueue": "E4", "ResetStickyTaskQueue": "E4",
+    "ShutdownWorker": "E4", "GetWorkflowExecutionHistoryReverse": "E4",
+    "RecordWorkerHeartbeat": "E4", "FetchWorkerConfig": "E4", "UpdateWorkerConfig": "E4",
+    # Execution P5: Long-poll variants + OpenAPI
+    "PollWorkflowExecutionHistory": "E5", "PollActivityExecutionDescription": "E5",
+    # Visibility (separate rate limiter)
+    "CountWorkflowExecutions": "V1", "ScanWorkflowExecutions": "V1",
+    "ListOpenWorkflowExecutions": "V1", "ListClosedWorkflowExecutions": "V1",
+    "ListWorkflowExecutions": "V1", "ListArchivedWorkflowExecutions": "V1",
+    "ListWorkers": "V1", "DescribeWorker": "V1",
+    "CountActivityExecutions": "V1", "ListActivityExecutions": "V1",
+    "GetWorkerTaskReachability": "V1", "ListSchedules": "V1", "CountSchedules": "V1",
+    "ListBatchOperations": "V1", "ListDeployments": "V1",
+    "GetDeploymentReachability": "V1", "ListWorkerDeployments": "V1",
+    # Namespace replication inducing (separate rate limiter)
+    "RegisterNamespace": "NR1", "UpdateNamespace": "NR1",
+    "UpdateWorkerBuildIdCompatibility": "NR2", "UpdateWorkerVersioningRules": "NR2",
+}
+
+# Static routing map: which backend service(s) each gRPC method is forwarded to
+# by the Frontend service. Derived from temporal/service/frontend/workflow_handler.go.
+# "Frontend" means the call is handled entirely by the Frontend service.
+METHOD_SERVICE_ROUTING = {
+    # Frontend-only (no backend hop)
+    "GetSystemInfo": ["Frontend"],
+    "GetClusterInfo": ["Frontend"],
+    "DescribeNamespace": ["Frontend"],
+    "ListNamespaces": ["Frontend"],
+    "RegisterNamespace": ["Frontend"],
+    "UpdateNamespace": ["Frontend"],
+    "DeprecateNamespace": ["Frontend"],
+    "GetSearchAttributes": ["Frontend"],
+    # Frontend → History
+    "SignalWorkflowExecution": ["History"],
+    "TerminateWorkflowExecution": ["History"],
+    "RequestCancelWorkflowExecution": ["History"],
+    "ResetWorkflowExecution": ["History"],
+    "DeleteWorkflowExecution": ["History"],
+    "GetWorkflowExecutionHistory": ["History"],
+    "GetWorkflowExecutionHistoryReverse": ["History"],
+    "DescribeWorkflowExecution": ["History"],
+    "QueryWorkflow": ["History"],
+    "UpdateWorkflowExecution": ["History"],
+    "PollWorkflowExecutionUpdate": ["History"],
+    "RecordActivityTaskHeartbeat": ["History"],
+    "RecordActivityTaskHeartbeatById": ["History"],
+    "RespondActivityTaskCompleted": ["History"],
+    "RespondActivityTaskCompletedById": ["History"],
+    "RespondActivityTaskFailed": ["History"],
+    "RespondActivityTaskFailedById": ["History"],
+    "RespondActivityTaskCanceled": ["History"],
+    "RespondActivityTaskCanceledById": ["History"],
+    "RespondWorkflowTaskFailed": ["History"],
+    "ResetStickyTaskQueue": ["History"],
+    "PauseWorkflowExecution": ["History"],
+    "UnpauseWorkflowExecution": ["History"],
+    "UpdateWorkflowExecutionOptions": ["History"],
+    "UpdateActivityOptions": ["History"],
+    "PauseActivity": ["History"],
+    "UnpauseActivity": ["History"],
+    "ResetActivity": ["History"],
+    # Frontend → History + Matching (creates workflow/commands, then enqueues tasks)
+    "StartWorkflowExecution": ["History", "Matching"],
+    "SignalWithStartWorkflowExecution": ["History", "Matching"],
+    "ExecuteMultiOperation": ["History", "Matching"],
+    "RespondWorkflowTaskCompleted": ["History", "Matching"],
+    # Frontend → Matching
+    "PollWorkflowTaskQueue": ["Matching"],
+    "PollActivityTaskQueue": ["Matching"],
+    "RespondQueryTaskCompleted": ["Matching"],
+    "ListTaskQueuePartitions": ["Matching"],
+    "DescribeTaskQueue": ["Matching"],
+    "RespondNexusTaskCompleted": ["Matching"],
+    "RespondNexusTaskFailed": ["Matching"],
+    "PollNexusTaskQueue": ["Matching"],
+    "UpdateTaskQueueConfig": ["Matching"],
+    # Frontend → Visibility
+    "ListWorkflowExecutions": ["Visibility"],
+    "CountWorkflowExecutions": ["Visibility"],
+    "ScanWorkflowExecutions": ["Visibility"],
+    "ListOpenWorkflowExecutions": ["Visibility"],
+    "ListClosedWorkflowExecutions": ["Visibility"],
+    "ListArchivedWorkflowExecutions": ["Visibility"],
+    "ListSchedules": ["Visibility"],
+    "CountSchedules": ["Visibility"],
+    "ListBatchOperations": ["Visibility"],
+    "ListDeployments": ["Visibility"],
+    "GetDeploymentReachability": ["Visibility"],
+    "ListWorkerDeployments": ["Visibility"],
+    "ListWorkers": ["Visibility"],
+    "DescribeWorker": ["Visibility"],
+    "CountActivityExecutions": ["Visibility"],
+    "ListActivityExecutions": ["Visibility"],
+    "GetWorkerTaskReachability": ["Visibility"],
+    # Frontend → History (schedule/batch operations are history-managed)
+    "CreateSchedule": ["History"],
+    "UpdateSchedule": ["History"],
+    "PatchSchedule": ["History"],
+    "DeleteSchedule": ["History"],
+    "DescribeSchedule": ["History"],
+    "ListScheduleMatchingTimes": ["History"],
+    "StartBatchOperation": ["History"],
+    "StopBatchOperation": ["History"],
+    "DescribeBatchOperation": ["History"],
+}
+
+
+def get_service_routing(method):
+    """Return the list of backend services a method routes to, or ['Frontend']."""
+    return METHOD_SERVICE_ROUTING.get(method, ["Frontend"])
+
+
+def get_priority_tag(method):
+    """Return a priority annotation like '[E1]' for the method, or ''."""
+    pri = API_PRIORITY.get(method, "")
+    return f"[{pri}]" if pri else ""
 
 
 def extract_detail(method, detail):
@@ -158,7 +323,7 @@ def classify_calls(summary_calls, details):
     return seq_role, seq_identity
 
 
-def generate_diagram(captures_dir, raw_mode=False):
+def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
     summary_calls = load_summary(captures_dir)
     details = load_json_files(captures_dir)
     seq_role, seq_identity = classify_calls(summary_calls, details)
@@ -166,6 +331,8 @@ def generate_diagram(captures_dir, raw_mode=False):
     # collapsed polls and missing responses make balanced activations
     # impossible — causing Mermaid rendering errors.
     use_activations = raw_mode
+    # Track which backend services are actually used (for participant declarations)
+    used_services = set()
 
     # Build participant list in order of first appearance
     seen_participants = OrderedDict()
@@ -238,7 +405,8 @@ def generate_diagram(captures_dir, raw_mode=False):
             if counts.get("PollActivityTaskQueue", 0) > 0:
                 parts.append(f"{counts['PollActivityTaskQueue']}x PollActivityTaskQueue")
             if parts:
-                into_lines.append(f"    Note over {pid},Server: {' + '.join(parts)} (long-poll, waiting)")
+                server_name = "Frontend" if services_mode else "Server"
+                into_lines.append(f"    Note over {pid},{server_name}: {' + '.join(parts)} (long-poll, waiting)")
             del pending_polls[pid]
 
     for call in summary_calls:
@@ -267,27 +435,58 @@ def generate_diagram(captures_dir, raw_mode=False):
             flush_polls(body_lines, pid)
 
         annotation = extract_detail(method, detail) if detail else ""
-        label = f"[{seq}] {method}: {annotation}" if annotation else f"[{seq}] {method}"
+        pri = get_priority_tag(method)
+        label_parts = [f"[{seq}]", pri, method]
+        label_base = " ".join(p for p in label_parts if p)
+        label = f"{label_base}: {annotation}" if annotation else label_base
         label = label.replace('"', "'")
 
         act = "+" if use_activations else ""
         deact = "-" if use_activations else ""
 
-        if direction == "request":
-            body_lines.append(f"    {pid}->>{act}Server: {label}")
-        elif direction == "response":
-            if is_poll and msg_len > 0:
-                if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
-                    pending_polls[pid][method] -= 1
-                    flush_polls(body_lines, pid)
-                task_type = "workflow task" if "Workflow" in method else "activity task"
-                replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
-                body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method} ({task_type} delivered{replay_note})")
-            elif is_poll:
-                if raw_mode:
-                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method} (empty)")
-            else:
-                body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {method}")
+        if services_mode:
+            routing = get_service_routing(method)
+            frontend_only = routing == ["Frontend"]
+            for svc in routing:
+                used_services.add(svc)
+            if not frontend_only:
+                used_services.add("Frontend")
+
+            if direction == "request":
+                body_lines.append(f"    {pid}->>{act}Frontend: {label}")
+                if not frontend_only:
+                    for svc in routing:
+                        if svc != "Frontend":
+                            body_lines.append(f"    Frontend->>{svc}: routes to {svc}")
+            elif direction == "response":
+                if is_poll and msg_len > 0:
+                    if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
+                        pending_polls[pid][method] -= 1
+                        flush_polls(body_lines, pid)
+                    task_type = "workflow task" if "Workflow" in method else "activity task"
+                    replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
+                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note})")
+                elif is_poll:
+                    if raw_mode:
+                        body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} (empty)")
+                else:
+                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method}")
+        else:
+            if direction == "request":
+                body_lines.append(f"    {pid}->>{act}Server: {label}")
+            elif direction == "response":
+                if is_poll and msg_len > 0:
+                    if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
+                        pending_polls[pid][method] -= 1
+                        flush_polls(body_lines, pid)
+                    task_type = "workflow task" if "Workflow" in method else "activity task"
+                    replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
+                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note})")
+                elif is_poll:
+                    if raw_mode:
+                        body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} (empty)")
+                else:
+                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method}")
 
     if not raw_mode:
         flush_polls(body_lines)
@@ -311,7 +510,16 @@ def generate_diagram(captures_dir, raw_mode=False):
             lines.append(f"    participant {pid}")
         else:
             lines.append(f"    participant {pid} as {display}")
-    lines.append("    participant Server")
+
+    if services_mode:
+        # Declare service participants in architectural order, only if used
+        lines.append("    participant Frontend")
+        for svc in ["History", "Matching", "Visibility"]:
+            if svc in used_services:
+                lines.append(f"    participant {svc}")
+    else:
+        lines.append("    participant Server")
+
     for key, pid in workers:
         display = participant_display[key]
         if display == pid:
@@ -324,8 +532,60 @@ def generate_diagram(captures_dir, raw_mode=False):
     return "\n".join(lines)
 
 
+# Descriptions for each priority tag, grouped by rate limiter pool.
+PRIORITY_KEY = OrderedDict([
+    ("E0", "System (GetClusterInfo, GetSystemInfo, ...)"),
+    ("E1", "External events + completions (Start, Signal, Respond*Completed, Heartbeat)"),
+    ("E2", "State changes (Cancel, Terminate, Reset, Delete, GetHistory, Schedules)"),
+    ("E3", "Status queries + failure responses (Describe*, Query, Respond*Failed)"),
+    ("E4", "Polls + low priority (Poll*TaskQueue, ResetStickyTaskQueue, ShutdownWorker)"),
+    ("E5", "Long-poll variants (GetHistory w/ WaitNewEvent, DescribeActivity w/ LongPollToken)"),
+    ("V1", "Visibility (List*, Count*, Scan*)"),
+    ("NR1", "Namespace replication P1 (RegisterNamespace, UpdateNamespace)"),
+    ("NR2", "Namespace replication P2 (UpdateWorkerBuildIdCompatibility, UpdateWorkerVersioningRules)"),
+])
+
+
+def generate_priority_key(diagram_text):
+    """Return a markdown priority key containing only tags that appear in the diagram."""
+    lines = ["## Priority Key", ""]
+    lines.append("| Tag | Rate Limiter | Description |")
+    lines.append("|-----|-------------|-------------|")
+    for tag, desc in PRIORITY_KEY.items():
+        if f"[{tag}]" in diagram_text:
+            pool = {"E": "Execution", "V": "Visibility", "N": "Namespace Replication"}[tag[0]]
+            lines.append(f"| `{tag}` | {pool} | {desc} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
+SERVICE_DESCRIPTIONS = OrderedDict([
+    ("Frontend", "gRPC gateway — auth, rate limiting, namespace ops"),
+    ("History", "Workflow state machine, event history, command processing"),
+    ("Matching", "Task queue dispatch, polling, task delivery"),
+    ("Visibility", "Search and list queries (backed by Elasticsearch/SQL)"),
+])
+
+
+def generate_service_key(diagram_text):
+    """Return a markdown service routing key for services that appear in the diagram."""
+    present = [svc for svc in SERVICE_DESCRIPTIONS if svc in diagram_text]
+    if not present:
+        return ""
+    lines = ["## Service Routing", ""]
+    lines.append("All SDK traffic enters via Frontend. Arrows like `Frontend->>History` show internal routing.")
+    lines.append("")
+    lines.append("| Service | Description |")
+    lines.append("|---------|-------------|")
+    for svc in present:
+        lines.append(f"| **{svc}** | {SERVICE_DESCRIPTIONS[svc]} |")
+    lines.append("")
+    return "\n".join(lines)
+
+
 if __name__ == "__main__":
     raw_mode = "--raw" in sys.argv
+    services_mode = "--services" in sys.argv
     args = [a for a in sys.argv[1:] if not a.startswith("--")]
     captures_dir = args[0] if args else "captures/grpc-calls"
 
@@ -333,14 +593,24 @@ if __name__ == "__main__":
         print(f"Error: directory not found: {captures_dir}", file=sys.stderr)
         sys.exit(1)
 
-    diagram = generate_diagram(captures_dir, raw_mode=raw_mode)
+    diagram = generate_diagram(captures_dir, raw_mode=raw_mode, services_mode=services_mode)
+    priority_key = generate_priority_key(diagram)
+    service_key = generate_service_key(diagram) if services_mode else ""
 
     suffix = "-raw" if raw_mode else ""
+    if services_mode:
+        suffix += "-services"
     out_path = os.path.join(captures_dir, f"sequence{suffix}.md")
     with open(out_path, "w") as f:
+        f.write(priority_key)
+        if service_key:
+            f.write(service_key)
         f.write("```mermaid\n")
         f.write(diagram)
         f.write("\n```\n")
 
+    print(priority_key)
+    if service_key:
+        print(service_key)
     print(diagram)
     print(f"\n→ Written to {out_path}", file=sys.stderr)
