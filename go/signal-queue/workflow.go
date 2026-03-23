@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"go.temporal.io/api/enums/v1"
 	"go.temporal.io/sdk/workflow"
 )
 
@@ -23,18 +24,36 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 
 	channels := map[string]workflow.Channel{}
 	signalCh := workflow.GetSignalChannel(ctx, "submit_deployment_request")
+	pending := 0
 
 	dispatch := func(req DeploymentRequest) {
-		// Spin up a per-module channel on first sight of a new DeploymentModule
 		if _, ok := channels[req.DeploymentModule]; !ok {
 			ch := workflow.NewChannel(ctx)
 			channels[req.DeploymentModule] = ch
 			module := req.DeploymentModule
 			workflow.Go(ctx, func(gCtx workflow.Context) {
-				processDeploymentModule(gCtx, module, ch)
+				for {
+					var r DeploymentRequest
+					ch.Receive(gCtx, &r)
+
+					logger.Info("Processing request", "deploymentModule", module, "requestID", r.RequestID)
+					childCtx := workflow.WithChildOptions(gCtx, workflow.ChildWorkflowOptions{
+						WorkflowID:        fmt.Sprintf("%s-%s-%s", workflow.GetInfo(gCtx).WorkflowExecution.ID, module, r.RequestID),
+						ParentClosePolicy: enums.PARENT_CLOSE_POLICY_REQUEST_CANCEL,
+					})
+
+					var result string
+					if err := workflow.ExecuteChildWorkflow(childCtx, DeployChangesWorkflow, r).Get(gCtx, &result); err != nil {
+						logger.Error("Child workflow failed", "deploymentModule", module, "requestID", r.RequestID, "error", err)
+					} else {
+						logger.Info("Processed request", "deploymentModule", module, "requestID", r.RequestID, "result", result)
+					}
+					pending--
+				}
 			})
 		}
 
+		pending++
 		ch := channels[req.DeploymentModule]
 		r := req
 		workflow.Go(ctx, func(gCtx workflow.Context) {
@@ -42,39 +61,34 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 		})
 	}
 
-	for {
-		var req DeploymentRequest
-		signalCh.Receive(ctx, &req)
-		// for sliding expiry.
-		// ok, _ := signalCh.ReceiveWithTimeout(ctx, 1*time.Minute, &req)
-		// if !ok {
-		// 	   logger.Info("No new requests for 5 minutes, exiting")
-		//     return nil
-		// }
-		dispatch(req)
-	}
-}
-
-// processDeploymentModule sequentially processes requests for a single deployment module from the given channel.
-func processDeploymentModule(ctx workflow.Context, module string, ch workflow.ReceiveChannel) {
-	logger := workflow.GetLogger(ctx)
-	for {
-		var req DeploymentRequest
-		ch.Receive(ctx, &req)
-
-		logger.Info("Processing request", "deploymentModule", module, "requestID", req.RequestID)
-
-		childCtx := workflow.WithChildOptions(ctx, workflow.ChildWorkflowOptions{
-			WorkflowID: fmt.Sprintf("%s-%s-%s", workflow.GetInfo(ctx).WorkflowExecution.ID, module, req.RequestID),
-		})
-
-		var result string
-		if err := workflow.ExecuteChildWorkflow(childCtx, DeployChangesWorkflow, req).Get(ctx, &result); err != nil {
-			logger.Error("Child workflow failed", "deploymentModule", module, "requestID", req.RequestID, "error", err)
-			continue
+	// Goroutine continuously drains signals
+	workflow.Go(ctx, func(gCtx workflow.Context) {
+		for {
+			var req DeploymentRequest
+			signalCh.Receive(gCtx, &req)
+			dispatch(req)
 		}
-		logger.Info("Processed request", "deploymentModule", module, "requestID", req.RequestID, "result", result)
+	})
+
+	// Main loop: idle detection
+	// Wait until all pending work completes, then wait for new work to arrive.
+	// If no new work arrives within the timeout, shut down.
+	for {
+		workflow.Await(ctx, func() bool { return pending == 0 })
+		newWork, _ := workflow.AwaitWithTimeout(ctx, 1*time.Minute, func() bool {
+			return pending > 0
+		})
+		if !newWork {
+			break
+		}
 	}
+
+	if pending > 0 {
+		workflow.Await(ctx, func() bool { return pending == 0 })
+	}
+
+	logger.Info("All work complete, workflow finishing")
+	return nil
 }
 
 // DeployChangesWorkflow simulates processing a single request for a DeploymentModule.

@@ -2,7 +2,6 @@ package signalqueue
 
 import (
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/mock"
 	"github.com/stretchr/testify/suite"
@@ -33,9 +32,6 @@ func (s *WorkflowTestSuite) TestSameTypeProcessedSequentially() {
 		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r1"})
 		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r2"})
 	}, 0)
-	env.RegisterDelayedCallback(func() {
-		env.CancelWorkflow()
-	}, time.Second)
 
 	env.ExecuteWorkflow(LandingZoneDeploymentWorkflow)
 
@@ -60,9 +56,6 @@ func (s *WorkflowTestSuite) TestDifferentTypesProcessedInParallel() {
 		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeB", RequestID: "r3"})
 		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r4"})
 	}, 0)
-	env.RegisterDelayedCallback(func() {
-		env.CancelWorkflow()
-	}, time.Second)
 
 	env.ExecuteWorkflow(LandingZoneDeploymentWorkflow)
 
