@@ -1,36 +1,45 @@
 package signalqueue
 
 import (
+	"errors"
 	"time"
 
 	"go.temporal.io/sdk/workflow"
 )
 
+var ErrWorkflowClosing = errors.New("workflow is shutting down")
+
 const TaskQueue = "signal-queue"
 
-// DeploymentRequest is the signal payload for submitting a request.
+// DeploymentRequest is the payload for submitting a deployment request.
 type DeploymentRequest struct {
 	RequestID        string `json:"request_id"`
 	DeploymentModule string `json:"deploymentmodule"`
 }
 
-// LandingZoneDeploymentWorkflow processes requests from a signal-driven queue.
+// LandingZoneDeploymentWorkflow processes requests via an update handler.
 // Requests of the same DeploymentModule are processed sequentially; different modules run in parallel.
 func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 	logger := workflow.GetLogger(ctx)
 	logger.Info("LandingZoneDeploymentWorkflow started")
 
-	signalCh := workflow.GetSignalChannel(ctx, "submit_deployment_request")
+	closing := false
 	dispatcher := NewModuleDispatcher(ctx)
 
-	// Goroutine continuously drains signals
-	workflow.Go(ctx, func(gCtx workflow.Context) {
-		for {
-			var req DeploymentRequest
-			signalCh.Receive(gCtx, &req)
+	workflow.SetUpdateHandlerWithOptions(ctx, "submit_deployment_request",
+		func(ctx workflow.Context, req DeploymentRequest) error {
 			dispatcher.Dispatch(req)
-		}
-	})
+			return nil
+		},
+		workflow.UpdateHandlerOptions{
+			Validator: func(ctx workflow.Context, req DeploymentRequest) error {
+				if closing {
+					return ErrWorkflowClosing
+				}
+				return nil
+			},
+		},
+	)
 
 	// Idle detection: wait until all pending work completes, then wait for new work.
 	// If no new work arrives within the timeout, shut down.
@@ -40,12 +49,9 @@ func LandingZoneDeploymentWorkflow(ctx workflow.Context) error {
 			return dispatcher.HasWork()
 		})
 		if !newWork {
+			closing = true
 			break
 		}
-	}
-
-	if dispatcher.HasWork() {
-		workflow.Await(ctx, func() bool { return dispatcher.AllComplete() })
 	}
 
 	logger.Info("All work complete, workflow finishing")

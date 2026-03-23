@@ -17,6 +17,14 @@ func TestWorkflowSuite(t *testing.T) {
 	suite.Run(t, new(WorkflowTestSuite))
 }
 
+func (s *WorkflowTestSuite) sendUpdate(env *testsuite.TestWorkflowEnvironment, req DeploymentRequest) {
+	env.UpdateWorkflow("submit_deployment_request", req.RequestID, &testsuite.TestUpdateCallback{
+		OnReject:   func(err error) { s.Fail("update should not be rejected", err) },
+		OnAccept:   func() {},
+		OnComplete: func(interface{}, error) {},
+	}, req)
+}
+
 func (s *WorkflowTestSuite) TestSameTypeProcessedSequentially() {
 	env := s.NewTestWorkflowEnvironment()
 	env.RegisterWorkflow(DeployChangesWorkflow)
@@ -29,8 +37,8 @@ func (s *WorkflowTestSuite) TestSameTypeProcessedSequentially() {
 		})
 
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r1"})
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r2"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeA", RequestID: "r1"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeA", RequestID: "r2"})
 	}, 0)
 
 	env.ExecuteWorkflow(LandingZoneDeploymentWorkflow)
@@ -51,10 +59,10 @@ func (s *WorkflowTestSuite) TestDifferentTypesProcessedInParallel() {
 		})
 
 	env.RegisterDelayedCallback(func() {
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r1"})
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r2"})
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeB", RequestID: "r3"})
-		env.SignalWorkflow("submit_deployment_request", DeploymentRequest{DeploymentModule: "typeA", RequestID: "r4"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeA", RequestID: "r1"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeA", RequestID: "r2"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeB", RequestID: "r3"})
+		s.sendUpdate(env, DeploymentRequest{DeploymentModule: "typeA", RequestID: "r4"})
 	}, 0)
 
 	env.ExecuteWorkflow(LandingZoneDeploymentWorkflow)

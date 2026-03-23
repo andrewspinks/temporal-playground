@@ -42,26 +42,38 @@ func main() {
 			return
 		}
 
-		// SignalWithStartWorkflow atomically starts the scheduler workflow (if not
-		// already running) and sends the submit_deployment_request signal with the request.
-		_, err := c.SignalWithStartWorkflow(
+		deploymentReq := app.DeploymentRequest{
+			RequestID:        req.RequestID,
+			DeploymentModule: req.DeploymentModule,
+		}
+
+		// Start the workflow if not already running (idempotent via workflow ID).
+		_, _ = c.ExecuteWorkflow(
 			r.Context(),
-			req.LZ_ID,                   // workflow ID
-			"submit_deployment_request", // signal name
-			app.DeploymentRequest{ // signal arg
-				RequestID:        req.RequestID,
-				DeploymentModule: req.DeploymentModule,
-			},
 			client.StartWorkflowOptions{
+				ID:        req.LZ_ID,
 				TaskQueue: app.TaskQueue,
 			},
-			app.LandingZoneDeploymentWorkflow, // workflow function
+			app.LandingZoneDeploymentWorkflow,
+		)
+
+		// Send the deployment request via update handler.
+		// If the workflow is shutting down, the update is rejected.
+		updateHandle, err := c.UpdateWorkflow(
+			r.Context(),
+			client.UpdateWorkflowOptions{
+				WorkflowID:   req.LZ_ID,
+				UpdateName:   "submit_deployment_request",
+				Args:         []interface{}{deploymentReq},
+				WaitForStage: client.WorkflowUpdateStageAccepted,
+			},
 		)
 		if err != nil {
-			log.Printf("SignalWithStartWorkflow failed: %v", err)
-			http.Error(w, "failed to submit request", http.StatusInternalServerError)
+			log.Printf("UpdateWorkflow failed: %v", err)
+			http.Error(w, "failed to submit request: "+err.Error(), http.StatusConflict)
 			return
 		}
+		_ = updateHandle
 
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(Response{
