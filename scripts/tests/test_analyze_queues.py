@@ -186,3 +186,11 @@ def test_analyze_queues_replay(analyze_mod, replay_calls_dir):
     assert "REPLAY" in output
     assert "replay-queue" in output
     assert "ReplayWorkflow" in output
+
+
+def test_analyze_queues_eager(analyze_mod, eager_calls_dir):
+    output = analyze_mod.analyze_queues(eager_calls_dir)
+    assert "Eager Execution" in output
+    assert "2 requested" in output  # 2 eager activity requests
+    assert "0 granted" in output    # none granted
+    assert "activities went through normal queue" in output

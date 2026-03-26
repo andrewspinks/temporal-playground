@@ -103,8 +103,17 @@ API_PRIORITY = {
     "UpdateWorkerBuildIdCompatibility": "NR2", "UpdateWorkerVersioningRules": "NR2",
 }
 
-# Static routing map: which backend service(s) each gRPC method is forwarded to
-# by the Frontend service. Derived from temporal/service/frontend/workflow_handler.go.
+# Static routing map: which backend service the Frontend proxies each gRPC
+# method to.  Derived from temporal/service/frontend/workflow_handler.go.
+#
+# Frontend is a thin proxy — it validates, rate-limits, and forwards each
+# request to exactly ONE backend service.  It never calls both History and
+# Matching for the same request.
+#
+# History may *asynchronously* enqueue tasks to Matching via its internal
+# transfer queue (e.g. after StartWorkflowExecution or
+# RespondWorkflowTaskCompleted), but that is invisible to Frontend.
+#
 # "Frontend" means the call is handled entirely by the Frontend service.
 METHOD_SERVICE_ROUTING = {
     # Frontend-only (no backend hop)
@@ -116,7 +125,11 @@ METHOD_SERVICE_ROUTING = {
     "UpdateNamespace": ["Frontend"],
     "DeprecateNamespace": ["Frontend"],
     "GetSearchAttributes": ["Frontend"],
-    # Frontend → History
+    # Frontend → History (History may async-enqueue tasks to Matching via transfer queue)
+    "StartWorkflowExecution": ["History"],
+    "SignalWithStartWorkflowExecution": ["History"],
+    "ExecuteMultiOperation": ["History"],
+    "RespondWorkflowTaskCompleted": ["History"],
     "SignalWorkflowExecution": ["History"],
     "TerminateWorkflowExecution": ["History"],
     "RequestCancelWorkflowExecution": ["History"],
@@ -145,11 +158,6 @@ METHOD_SERVICE_ROUTING = {
     "PauseActivity": ["History"],
     "UnpauseActivity": ["History"],
     "ResetActivity": ["History"],
-    # Frontend → History + Matching (creates workflow/commands, then enqueues tasks)
-    "StartWorkflowExecution": ["History", "Matching"],
-    "SignalWithStartWorkflowExecution": ["History", "Matching"],
-    "ExecuteMultiOperation": ["History", "Matching"],
-    "RespondWorkflowTaskCompleted": ["History", "Matching"],
     # Frontend → Matching
     "PollWorkflowTaskQueue": ["Matching"],
     "PollActivityTaskQueue": ["Matching"],
@@ -160,7 +168,7 @@ METHOD_SERVICE_ROUTING = {
     "RespondNexusTaskFailed": ["Matching"],
     "PollNexusTaskQueue": ["Matching"],
     "UpdateTaskQueueConfig": ["Matching"],
-    # Frontend → Visibility
+    # Frontend → Visibility (persistence layer, not a separate gRPC service)
     "ListWorkflowExecutions": ["Visibility"],
     "CountWorkflowExecutions": ["Visibility"],
     "ScanWorkflowExecutions": ["Visibility"],
@@ -209,7 +217,10 @@ def extract_detail(method, detail):
     if method == "StartWorkflowExecution":
         wf_type = payload.get("workflow_type", {}).get("name", "")
         wf_id = payload.get("workflow_id", "")
-        return f"{wf_type} ({wf_id[:20]}...)" if len(wf_id) > 20 else f"{wf_type} ({wf_id})"
+        base = f"{wf_type} ({wf_id[:20]}...)" if len(wf_id) > 20 else f"{wf_type} ({wf_id})"
+        if payload.get("request_eager_execution"):
+            base += " [eager-requested]"
+        return base
 
     if method == "UpdateWorkflowExecution":
         req = payload.get("request", {})
@@ -219,14 +230,102 @@ def extract_detail(method, detail):
 
     if method == "RespondWorkflowTaskCompleted":
         commands = payload.get("commands", [])
-        cmd_types = [c.get("command_type", "").replace("COMMAND_TYPE_", "") for c in commands]
-        return ", ".join(cmd_types) if cmd_types else ""
+        cmd_labels = []
+        for c in commands:
+            label = c.get("command_type", "").replace("COMMAND_TYPE_", "")
+            if label == "SCHEDULE_ACTIVITY_TASK":
+                attrs = c.get("schedule_activity_task_command_attributes", {})
+                if attrs.get("request_eager_execution"):
+                    label += " (eager)"
+            cmd_labels.append(label)
+        return ", ".join(cmd_labels) if cmd_labels else ""
 
     if method == "RespondActivityTaskFailed":
         failure = payload.get("failure", {})
         return failure.get("message", "")[:50]
 
     return ""
+
+
+def extract_response_detail(method, detail):
+    """Extract annotations from response payloads (eager delivery, etc.)."""
+    payload = (detail or {}).get("payload") or {}
+
+    if method == "StartWorkflowExecution" and payload.get("eager_workflow_task"):
+        return "eager WFT delivered"
+
+    if method == "RespondWorkflowTaskCompleted":
+        activity_tasks = payload.get("activity_tasks")
+        if activity_tasks:
+            count = len(activity_tasks)
+            return f"{count} eager activity task{'s' if count != 1 else ''} delivered"
+
+    return ""
+
+
+def infer_transfer_queue_arrows(method, detail, direction):
+    """Infer async inter-service arrows from the call context.
+
+    In --services mode, we can infer History→Matching transfer queue
+    dispatches and Matching→History record-started callbacks from the
+    SDK-level gRPC calls we captured. These are not directly observed
+    but can be reliably inferred.
+
+    Returns a list of (position, line) tuples where position is
+    "before" (insert before the main line) or "after" (insert after).
+    """
+    lines = []
+    payload = ((detail or {}).get("payload") or {})
+
+    # After RespondWorkflowTaskCompleted request: History will async-dispatch
+    # transfer tasks to Matching for each task-producing command.
+    if direction == "request" and method == "RespondWorkflowTaskCompleted":
+        commands = payload.get("commands", [])
+        activity_count = 0
+        eager_activity_count = 0
+        child_count = 0
+        for c in commands:
+            ct = c.get("command_type", "")
+            if ct == "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK":
+                activity_count += 1
+                attrs = c.get("schedule_activity_task_command_attributes", {})
+                if attrs.get("request_eager_execution"):
+                    eager_activity_count += 1
+            elif ct == "COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION":
+                child_count += 1
+
+        # Non-eager activities go through the transfer queue
+        non_eager = activity_count - eager_activity_count
+        if non_eager > 0:
+            label = f"{non_eager}x AddActivityTask" if non_eager > 1 else "AddActivityTask"
+            lines.append(("after", f"    History-->>Matching: {label} (async, transfer queue)"))
+        if eager_activity_count > 0:
+            label = f"{eager_activity_count}x activity" if eager_activity_count > 1 else "activity"
+            lines.append(("after", f"    Note over History,Matching: {label} eager-requested (may skip Matching)"))
+        if child_count > 0:
+            label = f"{child_count}x AddWorkflowTask (child)" if child_count > 1 else "AddWorkflowTask (child)"
+            lines.append(("after", f"    History-->>Matching: {label} (async, transfer queue)"))
+
+    # After StartWorkflowExecution response: if no eager WFT was delivered,
+    # History async-enqueues a WorkflowTask to Matching.
+    if direction == "response" and method == "StartWorkflowExecution":
+        if payload.get("eager_workflow_task"):
+            lines.append(("after", "    Note over History,Matching: WFT delivered eagerly (skipped Matching)"))
+        else:
+            lines.append(("after", "    History-->>Matching: AddWorkflowTask (async, transfer queue)"))
+
+    # Before poll task delivery: Matching synchronously called History
+    # to record the task as started before returning it to the worker.
+    if direction == "response" and method == "PollWorkflowTaskQueue":
+        msg_len = int((detail or {}).get("grpc_message_length", "0"))
+        if msg_len > 0:
+            lines.append(("before", "    Matching->>History: RecordWorkflowTaskStarted"))
+    if direction == "response" and method == "PollActivityTaskQueue":
+        msg_len = int((detail or {}).get("grpc_message_length", "0"))
+        if msg_len > 0:
+            lines.append(("before", "    Matching->>History: RecordActivityTaskStarted"))
+
+    return lines
 
 
 def detect_replay(detail):
@@ -435,6 +534,7 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
             flush_polls(body_lines, pid)
 
         annotation = extract_detail(method, detail) if detail else ""
+        resp_annotation = extract_response_detail(method, detail) if detail and direction == "response" else ""
         pri = get_priority_tag(method)
         label_parts = [f"[{seq}]", pri, method]
         label_base = " ".join(p for p in label_parts if p)
@@ -444,6 +544,9 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
         act = "+" if use_activations else ""
         deact = "-" if use_activations else ""
 
+        # Build response label suffix for eager delivery annotations
+        resp_suffix = f" ({resp_annotation})" if resp_annotation else ""
+
         if services_mode:
             routing = get_service_routing(method)
             frontend_only = routing == ["Frontend"]
@@ -452,25 +555,38 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
             if not frontend_only:
                 used_services.add("Frontend")
 
+            # Infer async inter-service arrows (transfer queue, record-started)
+            inferred = infer_transfer_queue_arrows(method, detail, direction)
+            before_lines = [line for pos, line in inferred if pos == "before"]
+            after_lines = [line for pos, line in inferred if pos == "after"]
+            # Mark Matching as used if any inferred arrows reference it
+            if inferred:
+                used_services.add("History")
+                used_services.add("Matching")
+
             if direction == "request":
                 body_lines.append(f"    {pid}->>{act}Frontend: {label}")
                 if not frontend_only:
                     for svc in routing:
                         if svc != "Frontend":
                             body_lines.append(f"    Frontend->>{svc}: routes to {svc}")
+                body_lines.extend(after_lines)
             elif direction == "response":
                 if is_poll and msg_len > 0:
                     if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
                         pending_polls[pid][method] -= 1
                         flush_polls(body_lines, pid)
+                    body_lines.extend(before_lines)
                     task_type = "workflow task" if "Workflow" in method else "activity task"
                     replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
                     body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note})")
+                    body_lines.extend(after_lines)
                 elif is_poll:
                     if raw_mode:
                         body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} (empty)")
                 else:
-                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method}")
+                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method}{resp_suffix}")
+                    body_lines.extend(after_lines)
         else:
             if direction == "request":
                 body_lines.append(f"    {pid}->>{act}Server: {label}")
@@ -486,7 +602,7 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
                     if raw_mode:
                         body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} (empty)")
                 else:
-                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method}")
+                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method}{resp_suffix}")
 
     if not raw_mode:
         flush_polls(body_lines)
@@ -560,7 +676,7 @@ def generate_priority_key(diagram_text):
 
 
 SERVICE_DESCRIPTIONS = OrderedDict([
-    ("Frontend", "gRPC gateway — auth, rate limiting, namespace ops"),
+    ("Frontend", "gRPC gateway — auth, rate limiting, validation, namespace ops"),
     ("History", "Workflow state machine, event history, command processing"),
     ("Matching", "Task queue dispatch, polling, task delivery"),
     ("Visibility", "Search and list queries (backed by Elasticsearch/SQL)"),
@@ -573,7 +689,20 @@ def generate_service_key(diagram_text):
     if not present:
         return ""
     lines = ["## Service Routing", ""]
-    lines.append("All SDK traffic enters via Frontend. Arrows like `Frontend->>History` show internal routing.")
+    lines.append("> **Caveat:** Internal service arrows are **inferred from the server source")
+    lines.append("> code**, not from actual inter-service traces. Solid `Frontend->>Service`")
+    lines.append("> arrows show which backend service Frontend proxies each request to.")
+    lines.append("> Dashed `History-->>Matching` arrows show inferred async transfer queue")
+    lines.append("> dispatches. Timing is approximate — transfer queue processing is async")
+    lines.append("> and may not happen immediately after the Frontend response.")
+    lines.append("")
+    lines.append("Frontend is a thin proxy — it validates, rate-limits, and forwards each request")
+    lines.append("to exactly **one** backend service. History asynchronously enqueues tasks to")
+    lines.append("Matching via its internal transfer queue (e.g. `AddWorkflowTask` after")
+    lines.append("`StartWorkflowExecution`, `AddActivityTask` after `SCHEDULE_ACTIVITY_TASK`")
+    lines.append("commands). Before delivering a task to a worker, Matching synchronously calls")
+    lines.append("History to record the task as started (`RecordWorkflowTaskStarted` /")
+    lines.append("`RecordActivityTaskStarted`).")
     lines.append("")
     lines.append("| Service | Description |")
     lines.append("|---------|-------------|")

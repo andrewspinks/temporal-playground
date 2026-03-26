@@ -1,0 +1,31 @@
+{
+  "seq": 5,
+  "tcp_stream": "0",
+  "direction": "request",
+  "method_name": "RespondWorkflowTaskCompleted",
+  "grpc_message_length": "200",
+  "payload": {
+    "identity": "1234@test-host",
+    "namespace": "default",
+    "commands": [
+      {
+        "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+        "schedule_activity_task_command_attributes": {
+          "activity_id": "1",
+          "activity_type": {"name": "DoWork"},
+          "task_queue": {"name": "eager-queue"},
+          "request_eager_execution": true
+        }
+      },
+      {
+        "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+        "schedule_activity_task_command_attributes": {
+          "activity_id": "2",
+          "activity_type": {"name": "DoWork"},
+          "task_queue": {"name": "eager-queue"},
+          "request_eager_execution": true
+        }
+      }
+    ]
+  }
+}

@@ -30,9 +30,292 @@ def test_extract_detail_respond_completed_with_commands(sequence_mod):
     assert "START_TIMER" in result
 
 
+def test_extract_detail_start_workflow_eager_requested(sequence_mod):
+    detail = {
+        "payload": {
+            "workflow_type": {"name": "MyWorkflow"},
+            "workflow_id": "wf-123",
+            "request_eager_execution": True,
+        }
+    }
+    result = sequence_mod.extract_detail("StartWorkflowExecution", detail)
+    assert "[eager-requested]" in result
+    assert "MyWorkflow" in result
+
+
+def test_extract_detail_start_workflow_not_eager(sequence_mod):
+    detail = {
+        "payload": {
+            "workflow_type": {"name": "MyWorkflow"},
+            "workflow_id": "wf-123",
+        }
+    }
+    result = sequence_mod.extract_detail("StartWorkflowExecution", detail)
+    assert "eager" not in result
+
+
+def test_extract_detail_respond_completed_eager_activity(sequence_mod):
+    detail = {
+        "payload": {
+            "commands": [
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {
+                        "request_eager_execution": True,
+                    },
+                },
+                {"command_type": "COMMAND_TYPE_START_TIMER"},
+            ]
+        }
+    }
+    result = sequence_mod.extract_detail("RespondWorkflowTaskCompleted", detail)
+    assert "SCHEDULE_ACTIVITY_TASK (eager)" in result
+    assert "START_TIMER" in result
+
+
+def test_extract_detail_respond_completed_not_eager_activity(sequence_mod):
+    detail = {
+        "payload": {
+            "commands": [
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {},
+                },
+            ]
+        }
+    }
+    result = sequence_mod.extract_detail("RespondWorkflowTaskCompleted", detail)
+    assert "SCHEDULE_ACTIVITY_TASK" in result
+    assert "(eager)" not in result
+
+
 def test_extract_detail_unknown_method(sequence_mod):
     result = sequence_mod.extract_detail("SomeUnknownMethod", {"payload": {}})
     assert result == ""
+
+
+# -- Unit tests: extract_response_detail --
+
+
+def test_response_detail_eager_wft_delivered(sequence_mod):
+    detail = {
+        "payload": {
+            "eager_workflow_task": {
+                "task_token": "abc",
+                "workflow_execution": {"workflow_id": "wf-1"},
+            }
+        }
+    }
+    result = sequence_mod.extract_response_detail("StartWorkflowExecution", detail)
+    assert "eager WFT delivered" in result
+
+
+def test_response_detail_no_eager_wft(sequence_mod):
+    detail = {"payload": {"run_id": "run-1"}}
+    result = sequence_mod.extract_response_detail("StartWorkflowExecution", detail)
+    assert result == ""
+
+
+def test_response_detail_eager_activity_tasks(sequence_mod):
+    detail = {
+        "payload": {
+            "activity_tasks": [
+                {"activity_type": {"name": "DoWork"}, "activity_id": "1"},
+                {"activity_type": {"name": "DoWork"}, "activity_id": "2"},
+            ]
+        }
+    }
+    result = sequence_mod.extract_response_detail("RespondWorkflowTaskCompleted", detail)
+    assert "2 eager activity tasks delivered" in result
+
+
+def test_response_detail_single_eager_activity_task(sequence_mod):
+    detail = {
+        "payload": {
+            "activity_tasks": [
+                {"activity_type": {"name": "DoWork"}, "activity_id": "1"},
+            ]
+        }
+    }
+    result = sequence_mod.extract_response_detail("RespondWorkflowTaskCompleted", detail)
+    assert "1 eager activity task delivered" in result
+
+
+def test_response_detail_no_eager_activity_tasks(sequence_mod):
+    detail = {"payload": {"workflow_task": {"task_token": "abc"}}}
+    result = sequence_mod.extract_response_detail("RespondWorkflowTaskCompleted", detail)
+    assert result == ""
+
+
+def test_response_detail_none(sequence_mod):
+    result = sequence_mod.extract_response_detail("SomeMethod", None)
+    assert result == ""
+
+
+# -- Unit tests: infer_transfer_queue_arrows --
+
+
+def test_infer_start_workflow_response_adds_wft(sequence_mod):
+    """StartWorkflowExecution response infers History→Matching AddWorkflowTask."""
+    detail = {"payload": {"run_id": "run-1"}, "grpc_message_length": "40"}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "StartWorkflowExecution", detail, "response"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert pos == "after"
+    assert "AddWorkflowTask" in line
+    assert "transfer queue" in line
+
+
+def test_infer_start_workflow_eager_skips_matching(sequence_mod):
+    """StartWorkflowExecution with eager WFT notes that Matching was skipped."""
+    detail = {"payload": {"eager_workflow_task": {"task_token": "abc"}}}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "StartWorkflowExecution", detail, "response"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert "skipped Matching" in line
+
+
+def test_infer_respond_completed_activity_commands(sequence_mod):
+    """RespondWorkflowTaskCompleted with activity commands infers AddActivityTask."""
+    detail = {
+        "payload": {
+            "commands": [
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {},
+                },
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {},
+                },
+            ]
+        }
+    }
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "RespondWorkflowTaskCompleted", detail, "request"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert pos == "after"
+    assert "2x AddActivityTask" in line
+    assert "transfer queue" in line
+
+
+def test_infer_respond_completed_eager_activity(sequence_mod):
+    """Eager activity requests get a note instead of a transfer queue arrow."""
+    detail = {
+        "payload": {
+            "commands": [
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {
+                        "request_eager_execution": True,
+                    },
+                },
+            ]
+        }
+    }
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "RespondWorkflowTaskCompleted", detail, "request"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert "eager-requested" in line
+    assert "may skip Matching" in line
+
+
+def test_infer_respond_completed_child_workflow(sequence_mod):
+    """START_CHILD_WORKFLOW_EXECUTION infers AddWorkflowTask for child."""
+    detail = {
+        "payload": {
+            "commands": [
+                {"command_type": "COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION"},
+            ]
+        }
+    }
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "RespondWorkflowTaskCompleted", detail, "request"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert "AddWorkflowTask (child)" in line
+
+
+def test_infer_respond_completed_mixed_commands(sequence_mod):
+    """Mix of activities, eager activities, and children produces correct arrows."""
+    detail = {
+        "payload": {
+            "commands": [
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {},
+                },
+                {
+                    "command_type": "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK",
+                    "schedule_activity_task_command_attributes": {
+                        "request_eager_execution": True,
+                    },
+                },
+                {"command_type": "COMMAND_TYPE_START_CHILD_WORKFLOW_EXECUTION"},
+                {"command_type": "COMMAND_TYPE_START_TIMER"},
+            ]
+        }
+    }
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "RespondWorkflowTaskCompleted", detail, "request"
+    )
+    # 1 non-eager activity → AddActivityTask, 1 eager → note, 1 child → AddWorkflowTask
+    assert len(arrows) == 3
+    texts = [line for _, line in arrows]
+    assert any("AddActivityTask" in t and "transfer queue" in t for t in texts)
+    assert any("eager-requested" in t for t in texts)
+    assert any("AddWorkflowTask (child)" in t for t in texts)
+
+
+def test_infer_poll_wft_delivery_record_started(sequence_mod):
+    """PollWorkflowTaskQueue delivery infers Matching→History RecordWorkflowTaskStarted."""
+    detail = {"payload": {}, "grpc_message_length": "500"}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "PollWorkflowTaskQueue", detail, "response"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert pos == "before"
+    assert "RecordWorkflowTaskStarted" in line
+
+
+def test_infer_poll_activity_delivery_record_started(sequence_mod):
+    """PollActivityTaskQueue delivery infers Matching→History RecordActivityTaskStarted."""
+    detail = {"payload": {}, "grpc_message_length": "300"}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "PollActivityTaskQueue", detail, "response"
+    )
+    assert len(arrows) == 1
+    pos, line = arrows[0]
+    assert pos == "before"
+    assert "RecordActivityTaskStarted" in line
+
+
+def test_infer_empty_poll_no_arrows(sequence_mod):
+    """Empty poll response produces no inferred arrows."""
+    detail = {"payload": {}, "grpc_message_length": "0"}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "PollWorkflowTaskQueue", detail, "response"
+    )
+    assert arrows == []
+
+
+def test_infer_unrelated_method_no_arrows(sequence_mod):
+    """Methods without inferred flows produce no arrows."""
+    detail = {"payload": {}}
+    arrows = sequence_mod.infer_transfer_queue_arrows(
+        "GetSystemInfo", detail, "response"
+    )
+    assert arrows == []
 
 
 # -- Unit tests: detect_replay --

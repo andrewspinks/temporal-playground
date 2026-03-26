@@ -156,6 +156,13 @@ def analyze_queues(captures_dir):
         )
     )
 
+    # Eager execution tracking
+    eager_wf_requested = 0
+    eager_wf_granted = 0
+    eager_activity_requested = 0
+    eager_activity_granted = 0
+    eager_activity_tasks = []  # tasks delivered eagerly
+
     # Connection-level map: (tcp_stream, method) -> (queue_key, identity).
     # All polls on the same TCP connection share a queue and identity,
     # so we can attribute responses without matching HTTP/2 stream IDs.
@@ -185,6 +192,38 @@ def analyze_queues(captures_dir):
             queues[key][identity]["poll_count"] += 1
             conn_queue[(tcp, method)] = (key, identity)
 
+        elif direction == "request" and method == "StartWorkflowExecution":
+            if payload.get("request_eager_execution"):
+                eager_wf_requested += 1
+
+        elif direction == "response" and method == "StartWorkflowExecution":
+            if payload.get("eager_workflow_task"):
+                eager_wf_granted += 1
+
+        elif direction == "request" and method == "RespondWorkflowTaskCompleted":
+            for cmd in payload.get("commands", []):
+                if cmd.get("command_type") == "COMMAND_TYPE_SCHEDULE_ACTIVITY_TASK":
+                    attrs = cmd.get("schedule_activity_task_command_attributes", {})
+                    if attrs.get("request_eager_execution"):
+                        eager_activity_requested += 1
+
+        elif direction == "response" and method == "RespondWorkflowTaskCompleted":
+            activity_tasks = payload.get("activity_tasks")
+            if activity_tasks:
+                eager_activity_granted += len(activity_tasks)
+                for at in activity_tasks:
+                    wf = at.get("workflow_execution", {})
+                    eager_activity_tasks.append({
+                        "type": "Activity",
+                        "seq": seq,
+                        "activity_type": at.get("activity_type", {}).get("name", "?"),
+                        "activity_id": at.get("activity_id", "?"),
+                        "workflow_type": at.get("workflow_type", {}).get("name", "?"),
+                        "workflow_id": wf.get("workflow_id", "?"),
+                        "attempt": at.get("attempt", 1),
+                        "eager": True,
+                    })
+
         elif direction == "response" and method in (
             "PollWorkflowTaskQueue",
             "PollActivityTaskQueue",
@@ -213,6 +252,12 @@ def analyze_queues(captures_dir):
                     (task.get("seq") or 0, queue_label, identity, task)
                 )
 
+    # Add eager activity tasks (delivered inline, not through any queue)
+    for task in eager_activity_tasks:
+        all_tasks_flat.append(
+            (task.get("seq") or 0, "EAGER (inline)", "inline", task)
+        )
+
     all_tasks_flat.sort(key=lambda x: x[0])
 
     # --- Build output lines ---
@@ -220,6 +265,19 @@ def analyze_queues(captures_dir):
 
     lines.append("# Task Queue Analysis")
     lines.append("")
+
+    # Eager execution summary (only shown if any eager activity was detected)
+    has_eager = (eager_wf_requested + eager_wf_granted
+                 + eager_activity_requested + eager_activity_granted) > 0
+    if has_eager:
+        lines.append("## Eager Execution")
+        lines.append("")
+        lines.append(f"- Eager workflow start: {eager_wf_requested} requested, {eager_wf_granted} granted")
+        if eager_activity_requested > 0 and eager_activity_granted == 0:
+            lines.append(f"- Eager activity execution: {eager_activity_requested} requested, {eager_activity_granted} granted (activities went through normal queue)")
+        else:
+            lines.append(f"- Eager activity execution: {eager_activity_requested} requested, {eager_activity_granted} granted")
+        lines.append("")
 
     # Group by namespace
     by_ns = defaultdict(list)
@@ -288,8 +346,9 @@ def analyze_queues(captures_dir):
 
             if task["type"] == "Workflow":
                 replay_badge = " REPLAY" if task.get("replay") else ""
+                eager_badge = " EAGER" if task.get("eager") else ""
                 lines.append(
-                    f"- {seq_ref} **Workflow task{replay_badge}** — `{task['workflow_type']}` attempt {task['attempt']}"
+                    f"- {seq_ref} **Workflow task{replay_badge}{eager_badge}** — `{task['workflow_type']}` attempt {task['attempt']}"
                 )
                 lines.append(f"  - Queue: `{queue_label}`")
                 lines.append(f"  - Workflow: `{task['workflow_id']}`")
@@ -305,8 +364,9 @@ def analyze_queues(captures_dir):
                     )
                 lines.append(f"  - Delivered to: `{identity}`")
             else:
+                eager_badge = " EAGER" if task.get("eager") else ""
                 lines.append(
-                    f"- {seq_ref} **Activity task** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}"
+                    f"- {seq_ref} **Activity task{eager_badge}** — `{task['activity_type']}` (id: {task['activity_id']}) attempt {task['attempt']}"
                 )
                 lines.append(f"  - Queue: `{queue_label}`")
                 lines.append(

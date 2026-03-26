@@ -1,0 +1,14 @@
+{
+  "seq": 2,
+  "tcp_stream": "1",
+  "direction": "request",
+  "method_name": "StartWorkflowExecution",
+  "grpc_message_length": "100",
+  "payload": {
+    "namespace": "default",
+    "workflow_id": "eager-wf-1",
+    "workflow_type": {"name": "EagerWorkflow"},
+    "task_queue": {"name": "eager-queue", "kind": "TASK_QUEUE_KIND_NORMAL"},
+    "identity": "5678@starter-host"
+  }
+}

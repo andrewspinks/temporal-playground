@@ -1,0 +1,12 @@
+{
+  "seq": 6,
+  "tcp_stream": "0",
+  "direction": "request",
+  "method_name": "PollActivityTaskQueue",
+  "grpc_message_length": "120",
+  "payload": {
+    "namespace": "default",
+    "task_queue": {"name": "eager-queue", "kind": "TASK_QUEUE_KIND_NORMAL"},
+    "identity": "1234@test-host"
+  }
+}

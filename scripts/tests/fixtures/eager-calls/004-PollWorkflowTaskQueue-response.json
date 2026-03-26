@@ -1,0 +1,19 @@
+{
+  "seq": 4,
+  "tcp_stream": "0",
+  "direction": "response",
+  "method_name": "PollWorkflowTaskQueue",
+  "grpc_message_length": "500",
+  "payload": {
+    "workflow_execution": {"workflow_id": "eager-wf-1", "run_id": "run-abc"},
+    "workflow_type": {"name": "EagerWorkflow"},
+    "attempt": 1,
+    "history": {
+      "events": [
+        {"event_id": "1", "event_type": "EVENT_TYPE_WORKFLOW_EXECUTION_STARTED"},
+        {"event_id": "2", "event_type": "EVENT_TYPE_WORKFLOW_TASK_SCHEDULED"},
+        {"event_id": "3", "event_type": "EVENT_TYPE_WORKFLOW_TASK_STARTED"}
+      ]
+    }
+  }
+}

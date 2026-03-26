@@ -306,12 +306,7 @@ capture name="default" port="7233":
 
 # Usage: just export-grpc [name]
 export-grpc name="default" port="7233":
-    @mkdir -p captures/{{ name }}/grpc-calls
-    tshark -r captures/{{ name }}/{{ name }}.pcapng -d 'tcp.port=={{ port }},http2' \
-        -Y 'grpc' \
-        -T json \
-        > captures/{{ name }}/grpc-calls/raw.json
-    python3 scripts/extract-grpc-calls.py captures/{{ name }}/grpc-calls/raw.json captures/{{ name }}/grpc-calls temporal.binpb
+    python3 scripts/extract-grpc-calls.py captures/{{ name }}/{{ name }}.pcapng captures/{{ name }}/grpc-calls temporal.binpb {{ port }}
     @echo "gRPC calls extracted to captures/{{ name }}/grpc-calls/"
 
 # List captured gRPC method calls (quick summary)
@@ -333,7 +328,7 @@ analyze-queues name="default":
 
 # Usage: just sequence-diagram [name]
 sequence-diagram name="default":
-    python3 scripts/sequence-diagram.py captures/{{ name }}/grpc-calls
+    python3 scripts/sequence-diagram.py captures/{{ name }}/grpc-calls --services
 
 # Generate a Mermaid sequence diagram with all polling shown (no simplification)
 

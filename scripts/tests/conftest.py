@@ -38,3 +38,8 @@ def sample_calls_dir():
 @pytest.fixture(scope="session")
 def replay_calls_dir():
     return str(FIXTURES_DIR / "replay-calls")
+
+
+@pytest.fixture(scope="session")
+def eager_calls_dir():
+    return str(FIXTURES_DIR / "eager-calls")

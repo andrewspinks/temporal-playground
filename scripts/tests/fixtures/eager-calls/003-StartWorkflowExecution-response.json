@@ -1,0 +1,10 @@
+{
+  "seq": 3,
+  "tcp_stream": "1",
+  "direction": "response",
+  "method_name": "StartWorkflowExecution",
+  "grpc_message_length": "40",
+  "payload": {
+    "run_id": "run-abc"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "seq": 7,
+  "tcp_stream": "0",
+  "direction": "response",
+  "method_name": "PollActivityTaskQueue",
+  "grpc_message_length": "300",
+  "payload": {
+    "activity_type": {"name": "DoWork"},
+    "activity_id": "1",
+    "workflow_type": {"name": "EagerWorkflow"},
+    "workflow_execution": {"workflow_id": "eager-wf-1", "run_id": "run-abc"},
+    "attempt": 1
+  }
+}
