@@ -576,6 +576,11 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
                     if not raw_mode and pid in pending_polls and pending_polls[pid].get(method, 0) > 0:
                         pending_polls[pid][method] -= 1
                         flush_polls(body_lines, pid)
+                    # Show the poll request routing (collapsed in simplified mode)
+                    body_lines.append(f"    {pid}->>Frontend: [{seq}] {pri} {method}")
+                    for svc in routing:
+                        if svc != "Frontend":
+                            body_lines.append(f"    Frontend->>{svc}: routes to {svc}")
                     body_lines.extend(before_lines)
                     task_type = "workflow task" if "Workflow" in method else "activity task"
                     replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
@@ -620,7 +625,7 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
     starters = [(k, v) for k, v in participant_id.items() if k[0] == "starter" and v in used_pids]
     workers = [(k, v) for k, v in participant_id.items() if k[0] == "worker" and v in used_pids]
 
-    for key, pid in starters:
+    for key, pid in starters + workers:
         display = participant_display[key]
         if display == pid:
             lines.append(f"    participant {pid}")
@@ -635,13 +640,6 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
                 lines.append(f"    participant {svc}")
     else:
         lines.append("    participant Server")
-
-    for key, pid in workers:
-        display = participant_display[key]
-        if display == pid:
-            lines.append(f"    participant {pid}")
-        else:
-            lines.append(f"    participant {pid} as {display}")
     lines.append("")
     lines.extend(body_lines)
 
