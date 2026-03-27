@@ -15,6 +15,7 @@ Usage: python3 scripts/sequence-diagram.py [captures-dir] [--raw] [--services]
 import json
 import glob
 import os
+import re
 import sys
 from collections import defaultdict, OrderedDict
 
@@ -210,9 +211,10 @@ def get_priority_tag(method):
     return f"[{pri}]" if pri else ""
 
 
-def extract_detail(method, detail):
+def extract_detail(method, detail, token_to_activity=None):
     """Extract a short annotation from the payload."""
     payload = (detail or {}).get("payload") or {}
+    token_to_activity = token_to_activity or {}
 
     if method == "StartWorkflowExecution":
         wf_type = payload.get("workflow_type", {}).get("name", "")
@@ -235,14 +237,31 @@ def extract_detail(method, detail):
             label = c.get("command_type", "").replace("COMMAND_TYPE_", "")
             if label == "SCHEDULE_ACTIVITY_TASK":
                 attrs = c.get("schedule_activity_task_command_attributes", {})
+                act_name = attrs.get("activity_type", {}).get("name", "")
+                if act_name:
+                    label = act_name
                 if attrs.get("request_eager_execution"):
                     label += " (eager)"
+            elif label == "START_CHILD_WORKFLOW_EXECUTION":
+                attrs = c.get("start_child_workflow_execution_command_attributes", {})
+                wf_name = attrs.get("workflow_type", {}).get("name", "")
+                if wf_name:
+                    label = f"child: {wf_name}"
             cmd_labels.append(label)
         return ", ".join(cmd_labels) if cmd_labels else ""
 
-    if method == "RespondActivityTaskFailed":
+    if method in ("RespondActivityTaskCompleted", "RespondActivityTaskCompletedById"):
+        token = payload.get("task_token", "")
+        act_name = token_to_activity.get(token, "")
+        return act_name
+
+    if method in ("RespondActivityTaskFailed", "RespondActivityTaskFailedById"):
+        token = payload.get("task_token", "")
+        act_name = token_to_activity.get(token, "")
         failure = payload.get("failure", {})
-        return failure.get("message", "")[:50]
+        msg = failure.get("message", "")[:50]
+        parts = [p for p in [act_name, msg] if p]
+        return ": ".join(parts) if parts else ""
 
     return ""
 
@@ -259,6 +278,24 @@ def extract_response_detail(method, detail):
         if activity_tasks:
             count = len(activity_tasks)
             return f"{count} eager activity task{'s' if count != 1 else ''} delivered"
+
+    return ""
+
+
+def extract_poll_delivery_detail(method, detail):
+    """Extract activity/workflow name from a poll response that delivered a task."""
+    payload = (detail or {}).get("payload") or {}
+
+    if method == "PollActivityTaskQueue":
+        name = payload.get("activity_type", {}).get("name", "")
+        attempt = payload.get("attempt", 1)
+        if name:
+            return f"{name}" + (f", attempt {attempt}" if attempt > 1 else "")
+
+    if method == "PollWorkflowTaskQueue":
+        name = payload.get("workflow_type", {}).get("name", "")
+        if name:
+            return name
 
     return ""
 
@@ -422,6 +459,133 @@ def classify_calls(summary_calls, details):
     return seq_role, seq_identity
 
 
+FAILURE_METHODS = ("RespondActivityTaskFailed", "RespondWorkflowTaskFailed")
+
+
+def annotate_failures_and_retries(body_lines):
+    """Add red backgrounds for failures and loop blocks for retry sequences.
+
+    Uses Mermaid ``rect`` for colored backgrounds and ``loop`` for grouping
+    consecutive retry cycles (deliver → fail repeated 2+ times).
+    """
+    # Phase 1: index delivery and failure lines
+    deliveries = []   # (line_idx,)
+    failures = []     # (line_idx,)
+
+    for i, line in enumerate(body_lines):
+        if "task delivered" in line:
+            deliveries.append(i)
+        elif any(m in line for m in FAILURE_METHODS):
+            # Request arrows only — solid ->>, not dashed -->>
+            if "->>" in line and "-->>" not in line:
+                failures.append(i)
+
+    # Phase 2: pair each delivery with failures before the next delivery
+    cycles = []
+    for di, d_idx in enumerate(deliveries):
+        next_d = deliveries[di + 1] if di + 1 < len(deliveries) else len(body_lines)
+        cycle_fails = [f for f in failures if d_idx < f < next_d]
+        if cycle_fails:
+            cycles.append((d_idx, cycle_fails[-1]))  # (delivery_line, last_failure_line)
+
+    # Phase 3: group consecutive cycles into retry sequences (2+)
+    retry_groups = []
+    i = 0
+    while i < len(cycles):
+        group = [cycles[i]]
+        j = i + 1
+        while j < len(cycles) and cycles[j][0] > group[-1][1]:
+            group.append(cycles[j])
+            j += 1
+        if len(group) >= 2:
+            retry_groups.append(group)
+            i = j
+        else:
+            i += 1
+
+    # Phase 4: compute line ranges for each retry group
+    retry_ranges = []        # (start, end, count)
+    failure_in_retry = set()
+
+    for group in retry_groups:
+        first_delivery = group[0][0]
+        last_failure = group[-1][1]
+
+        # Scan back from first delivery for context lines (poll request, routing, notes)
+        # Don't pull back generic "routes to" — those belong to the previous call.
+        start = first_delivery
+        while start > 0:
+            prev = body_lines[start - 1].strip()
+            if (prev.startswith("Note over") or "Record" in prev or
+                    "PollActivity" in prev or "PollWorkflow" in prev or
+                    "routes to Matching" in prev):
+                start -= 1
+            else:
+                break
+
+        # Scan forward from last failure for trailing routing / companion failure lines
+        end = last_failure
+        while end + 1 < len(body_lines):
+            nxt = body_lines[end + 1].strip()
+            if "routes to" in nxt:
+                end += 1
+            elif any(m in nxt for m in FAILURE_METHODS):
+                end += 1
+                while end + 1 < len(body_lines) and "routes to" in body_lines[end + 1]:
+                    end += 1
+            else:
+                break
+
+        retry_ranges.append((start, end, len(group)))
+        # Mark ALL failure lines within the retry range as covered
+        for f_idx in failures:
+            if start <= f_idx <= end:
+                failure_in_retry.add(f_idx)
+
+    # Phase 5: standalone failures (not in any retry group)
+    standalone_ranges = []
+    for f_idx in failures:
+        if f_idx in failure_in_retry:
+            continue
+        end = f_idx
+        while end + 1 < len(body_lines) and "routes to" in body_lines[end + 1]:
+            end += 1
+        # Include companion failure lines (same call's response / second task)
+        while end + 1 < len(body_lines):
+            nxt = body_lines[end + 1].strip()
+            if any(m in nxt for m in FAILURE_METHODS):
+                end += 1
+                while end + 1 < len(body_lines) and "routes to" in body_lines[end + 1]:
+                    end += 1
+            else:
+                break
+        standalone_ranges.append((f_idx, end))
+
+    # Phase 6: build result with markers
+    before = defaultdict(list)
+    after = defaultdict(list)
+
+    for start, end, count in retry_ranges:
+        before[start].append("    rect rgba(255, 0, 0, 0.1)")
+        before[start].append(f"    loop {count} retries")
+        after[end].append("    end")   # loop
+        after[end].append("    end")   # rect
+
+    for start, end in standalone_ranges:
+        before[start].append("    rect rgba(255, 0, 0, 0.1)")
+        after[end].append("    end")
+
+    result = []
+    for i, line in enumerate(body_lines):
+        for marker in before.get(i, []):
+            result.append(marker)
+        result.append(line)
+        for marker in after.get(i, []):
+            result.append(marker)
+
+    return result
+
+
 def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
     summary_calls = load_summary(captures_dir)
     details = load_json_files(captures_dir)
@@ -488,6 +652,17 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
         identity = seq_identity.get(seq, "?")
         return participant_id.get((role, identity), "Worker")
 
+    # --- Build task_token→activity_name map from poll deliveries ---
+    token_to_activity = {}
+    for d in details.values():
+        payload = d.get("payload") or {}
+        method_name = d.get("method_name", "")
+        if method_name == "PollActivityTaskQueue" and d.get("direction") == "response":
+            token = payload.get("task_token", "")
+            name = payload.get("activity_type", {}).get("name", "")
+            if token and name:
+                token_to_activity[token] = name
+
     # --- Generate body lines first, then declare only used participants ---
     body_lines = []
     pending_polls = defaultdict(lambda: defaultdict(int))
@@ -533,7 +708,7 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
         if not raw_mode and not is_poll and pid in pending_polls:
             flush_polls(body_lines, pid)
 
-        annotation = extract_detail(method, detail) if detail else ""
+        annotation = extract_detail(method, detail, token_to_activity) if detail else ""
         resp_annotation = extract_response_detail(method, detail) if detail and direction == "response" else ""
         pri = get_priority_tag(method)
         label_parts = [f"[{seq}]", pri, method]
@@ -584,7 +759,9 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
                     body_lines.extend(before_lines)
                     task_type = "workflow task" if "Workflow" in method else "activity task"
                     replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
-                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note})")
+                    delivery_detail = extract_poll_delivery_detail(method, detail) if detail else ""
+                    delivery_suffix = f": {delivery_detail}" if delivery_detail else ""
+                    body_lines.append(f"    Frontend-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note}{delivery_suffix})")
                     body_lines.extend(after_lines)
                 elif is_poll:
                     if raw_mode:
@@ -602,7 +779,9 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
                         flush_polls(body_lines, pid)
                     task_type = "workflow task" if "Workflow" in method else "activity task"
                     replay_note = " REPLAY" if "Workflow" in method and detect_replay(detail) else ""
-                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note})")
+                    delivery_detail = extract_poll_delivery_detail(method, detail) if detail else ""
+                    delivery_suffix = f": {delivery_detail}" if delivery_detail else ""
+                    body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} ({task_type} delivered{replay_note}{delivery_suffix})")
                 elif is_poll:
                     if raw_mode:
                         body_lines.append(f"    Server-->>{deact}{pid}: [{seq}] {pri} {method} (empty)")
@@ -611,6 +790,10 @@ def generate_diagram(captures_dir, raw_mode=False, services_mode=False):
 
     if not raw_mode:
         flush_polls(body_lines)
+
+    # Annotate failures (red background) and retry loops
+    if not raw_mode:
+        body_lines = annotate_failures_and_retries(body_lines)
 
     # Determine which participants actually appear in the body
     body_text = "\n".join(body_lines)
