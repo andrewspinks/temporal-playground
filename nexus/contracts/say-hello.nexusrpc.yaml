@@ -1,0 +1,31 @@
+nexusrpc: 1.0.0
+
+services:
+  SayHelloService:
+    operations:
+      my_sync_operation:
+        input:
+          $ref: '#/types/MyInput'
+        output:
+          $ref: '#/types/MyOutput'
+      say_hello:
+        input:
+          $ref: '#/types/MyInput'
+        output:
+          $ref: '#/types/MyOutput'
+
+types:
+  MyInput:
+    type: object
+    additionalProperties: false
+    properties:
+      name:
+        type: string
+    required: [name]
+  MyOutput:
+    type: object
+    additionalProperties: false
+    properties:
+      message:
+        type: string
+    required: [message]

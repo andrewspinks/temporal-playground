@@ -1,0 +1,26 @@
+# One-time setup: create the two namespaces and register the Nexus endpoint.
+# Run this after `temporal server start-dev` is up.
+setup:
+    temporal operator namespace create --namespace hello-nexus-basic-handler-namespace || true
+    temporal operator namespace create --namespace hello-nexus-basic-caller-namespace || true
+    temporal operator nexus endpoint create \
+        --name hello-nexus-basic-nexus-endpoint \
+        --target-namespace hello-nexus-basic-handler-namespace \
+        --target-task-queue my-handler-task-queue \
+        --description-file app/endpoint_description.md
+
+# Run the handler worker (long-running). Hosts the Nexus service + the workflow it starts.
+handler:
+    uv run python -m app.handler.worker
+
+# Run the caller: spins a caller worker, executes CallerWorkflow, prints results, exits.
+caller:
+    uv run python -m app.caller.app
+
+# Run tests
+test:
+    uv run pytest
+
+# Lint
+lint:
+    uv run ruff check .

@@ -1,0 +1,7 @@
+# Long-running worker — polls ts-nexus-caller-tq in ts-nexus-caller-ns
+worker:
+    pnpm worker
+
+# Run both caller workflows, print results, exit
+start:
+    pnpm start

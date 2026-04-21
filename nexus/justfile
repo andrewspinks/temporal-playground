@@ -1,0 +1,39 @@
+# Generate service stubs for all languages from the YAML contract.
+# Re-run whenever contracts/say-hello.nexusrpc.yaml changes.
+gen:
+    npx nexus-rpc-gen@alpha \
+        --lang py \
+        --out-file python/hello-world/app/service.py \
+        contracts/say-hello.nexusrpc.yaml
+    npx nexus-rpc-gen@alpha \
+        --lang ts \
+        --out-file ts/hello-world/src/api.ts \
+        contracts/say-hello.nexusrpc.yaml
+
+# One-time server setup: create namespaces and register the Nexus endpoint.
+# Run once after the Temporal server is up.
+setup:
+    temporal operator namespace create --namespace hello-nexus-basic-handler-namespace || true
+    temporal operator namespace create --namespace hello-nexus-basic-caller-namespace || true
+    temporal operator namespace create --namespace ts-nexus-caller-ns || true
+    temporal operator nexus endpoint create \
+        --name hello-nexus-basic-nexus-endpoint \
+        --target-namespace hello-nexus-basic-handler-namespace \
+        --target-task-queue my-handler-task-queue \
+        --description-file python/hello-world/app/endpoint_description.md || true
+
+# Python handler worker (long-running, namespace: hello-nexus-basic-handler-namespace)
+handler:
+    cd python/hello-world && just handler
+
+# Python caller workflow (prints results, exits)
+py-caller:
+    cd python/hello-world && just caller
+
+# TypeScript caller worker (long-running, namespace: ts-nexus-caller-ns)
+ts-worker:
+    cd ts/hello-world && just worker
+
+# TypeScript starter (runs both caller workflows, prints results, exits)
+ts-start:
+    cd ts/hello-world && just start
