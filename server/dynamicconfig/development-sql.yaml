@@ -1,0 +1,31 @@
+limit.maxIDLength:
+  - value: 255
+    constraints: {}
+system.forceSearchAttributesCacheRefreshOnRead:
+  - value: true # Dev setup only — do not enable in production
+    constraints: {}
+
+# Server 1.30+: route worker-target Nexus callbacks internally via temporal://system.
+# No publicly-reachable URL needed for cross-namespace calls.
+component.nexusoperations.useSystemCallbackURL:
+  - value: true
+
+# Fallback for servers older than 1.30 that don't know the flag above.
+# Host is irrelevant for cross-namespace calls — resolved via cluster membership.
+component.nexusoperations.callback.endpoint.template:
+  - value: http://temporal:7243/namespaces/{{.NamespaceName}}/nexus/callback
+component.callbacks.allowedAddresses:
+  - value:
+      - Pattern: "*"
+        AllowInsecure: true
+
+workercontroller.enabled:
+  - value: true
+
+workercontroller.compute_providers.enabled:
+  - value:
+      - aws-lambda
+
+workercontroller.scaling_algorithms.enabled:
+  - value:
+      - no-sync
