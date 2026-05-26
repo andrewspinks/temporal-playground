@@ -37,3 +37,11 @@ ts-worker:
 # TypeScript starter (runs both caller workflows, prints results, exits)
 ts-start:
     cd ts/hello-world && just start
+
+# Python — non-retryable ApplicationError in the handler workflow (immediate NexusOperationFailed)
+py-error-nonretryable:
+    cd python/hello-world && uv run python -m app.caller.app fail-now
+
+# Python — retryable ApplicationError (workflow retries; caller times out after ~30s)
+py-error-retryable:
+    cd python/hello-world && uv run python -m app.caller.app retry-me

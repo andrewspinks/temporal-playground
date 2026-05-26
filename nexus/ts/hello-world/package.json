@@ -23,12 +23,13 @@
   "dependencies": {
     "@temporalio/activity": "^1.16.0",
     "@temporalio/client": "^1.16.0",
+    "@temporalio/common": "^1.16.0",
     "@temporalio/envconfig": "^1.16.0",
     "@temporalio/nexus": "^1.16.0",
     "@temporalio/worker": "^1.16.0",
     "@temporalio/workflow": "^1.16.0",
-    "nexus-rpc": "^0.0.2",
-    "nanoid": "3.x"
+    "nanoid": "3.x",
+    "nexus-rpc": "^0.0.2"
   },
   "devDependencies": {
     "@tsconfig/node22": "^22.0.0",

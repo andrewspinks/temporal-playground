@@ -5,9 +5,11 @@ This file demonstrates how to implement a Nexus service.
 from __future__ import annotations
 
 import uuid
+from datetime import timedelta
 
 import nexusrpc
 from temporalio import nexus
+from temporalio.common import RetryPolicy
 
 from app.handler.workflows import SayHelloWorkflow
 from app.service import MyInput, SayHelloService, MyOutput
@@ -30,10 +32,23 @@ class SayHelloServiceHandler:
     async def say_hello(
         self, ctx: nexus.WorkflowRunOperationContext, input: MyInput
     ) -> nexus.WorkflowHandle[MyOutput]:
+        # For "retry-me": attach a retry policy so the workflow re-runs on failure.
+        # Without a retry policy, even a retryable ApplicationError fails the workflow
+        # immediately — Nexus doesn't add its own retries for workflow-backed operations.
+        retry_policy = (
+            RetryPolicy(
+                maximum_attempts=5,
+                initial_interval=timedelta(seconds=2),
+                maximum_interval=timedelta(seconds=10),
+            )
+            if input.name == "retry-me"
+            else None
+        )
         return await ctx.start_workflow(
             SayHelloWorkflow.run,
             input,
             id=str(uuid.uuid4()),
+            retry_policy=retry_policy,
         )
 
     # This is a Nexus operation that responds synchronously to all requests. That means

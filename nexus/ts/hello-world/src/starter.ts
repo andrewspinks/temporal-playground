@@ -27,9 +27,12 @@ async function run() {
   });
   console.log(`Started workflow: ${workflowId}`);
 
-  // Signal it to call the nexus endpoint
-  await handle.signal(callNexusSignal, 'World');
-  console.log('Sent callNexus signal');
+  // Signal it to call the nexus endpoint — 'fail-now' triggers a non-retryable error
+  // in the handler workflow so you can observe NexusOperationFailed in the event history.
+  // Change to 'World' (requires sending a 'complete' signal to the handler workflow) or
+  // 'retry-me' (retryable error, times out after 30s) to explore other behaviors.
+  await handle.signal(callNexusSignal, 'retry-me');
+  console.log('Sent callNexus signal (fail-now)');
 
   // Finish the workflow and collect results
   // await handle.signal(finishSignal);

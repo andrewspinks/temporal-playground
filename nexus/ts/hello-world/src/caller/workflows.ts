@@ -1,4 +1,5 @@
 import * as wf from '@temporalio/workflow';
+import { NexusOperationFailure } from '@temporalio/common';
 import { sayHelloService } from '../api';
 
 const ENDPOINT = 'hello-nexus-basic-nexus-endpoint';
@@ -36,9 +37,22 @@ export async function asyncCallerWorkflow(): Promise<string[]> {
     await wf.condition(() => pendingNames.length > 0 || finished);
     if (pendingNames.length > 0) {
       const name = pendingNames.shift()!;
-      const result = await client.executeOperation('sayHello', { name }, { scheduleToCloseTimeout: '1m' });
-      results.push(result.message);
-      wf.log.info('Nexus call completed', { name, message: result.message });
+      try {
+        const result = await client.executeOperation('sayHello', { name }, { scheduleToCloseTimeout: '30s' });
+        results.push(result.message);
+        wf.log.info('Nexus call completed', { name, message: result.message });
+      } catch (err: unknown) {
+        if (err instanceof NexusOperationFailure) {
+          // Non-retryable: arrives immediately after the handler workflow fails.
+          // Retryable: arrives after scheduleToCloseTimeout is exceeded.
+          const cause = err.cause instanceof Error ? err.cause.message : String(err.cause);
+          const msg = `[FAILED] ${err.operation}: ${cause}`;
+          wf.log.error('Nexus async operation failed', { name, operation: err.operation });
+          results.push(msg);
+        } else {
+          throw err;
+        }
+      }
     }
   }
 
