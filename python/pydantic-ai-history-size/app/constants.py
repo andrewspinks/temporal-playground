@@ -16,3 +16,11 @@ WORKFLOW_ID = "pydantic-ai-history-demo"
 NUM_TURNS = 12
 TOOL_RESULT_KB = 40
 INSTRUCTIONS_KB = 20
+
+# --- External storage (claim-check) ---------------------------------------
+# Payloads larger than this are offloaded to EXTERNAL_STORAGE_DIR and replaced
+# in event history by a small claim reference (see app/storage.py). The
+# threshold is deliberately below TOOL_RESULT_KB so the fat tool results — and
+# the growing model_request inputs — all get offloaded.
+EXTERNAL_STORAGE_THRESHOLD_KB = 32
+EXTERNAL_STORAGE_DIR = ".payload-store"
