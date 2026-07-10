@@ -1,0 +1,14 @@
+[project]
+name = "pydantic-ai-history-size"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "temporalio==1.27.2",
+    "pydantic-ai-slim>=2.8",
+]
+
+# Optional real-model backend. The sample runs fully offline by default (a
+# scripted FunctionModel); install this extra + set an API key to swap in a
+# real LLM in app/agent.py.  `uv sync --extra real`
+[project.optional-dependencies]
+real = ["pydantic-ai-slim[openai]>=2.8"]

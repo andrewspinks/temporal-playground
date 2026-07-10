@@ -1,0 +1,11 @@
+# Worker: the workflow + the pydantic-ai TemporalAgent activities
+# (model_request + call_tool), registered via AgentPlugin.
+worker:
+    uv run python -m app.worker
+
+# Run the agent workflow, then fetch its history and print the bloat report.
+start:
+    uv run python -m app.starter
+
+lint:
+    uv run ruff check .
