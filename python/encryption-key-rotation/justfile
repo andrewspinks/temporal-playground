@@ -1,0 +1,15 @@
+# Start the worker (holds the full keyring)
+worker:
+    uv run python -m app.worker
+
+# Run the rotation demonstration
+start:
+    uv run python -m app.starter
+
+# Run tests
+test:
+    uv run pytest
+
+# Lint
+lint:
+    uv run ruff check .
