@@ -1,0 +1,17 @@
+# .NET hello-world Temporal project
+
+# Run the Worker (leave running in its own terminal)
+worker:
+    dotnet run -- worker
+
+# Start a Workflow (optionally pass a name: `just start Andy`)
+start name="Temporal":
+    dotnet run -- starter {{ name }}
+
+# Build the project
+build:
+    dotnet build
+
+# Restore NuGet packages
+restore:
+    dotnet restore
