@@ -1,0 +1,36 @@
+# Copy to temporal.toml and fill in the API keys:  cp temporal.toml.example temporal.toml
+# temporal.toml is gitignored. The *.example template is not — keep keys out of it.
+#
+# Each profile is one identity: its own address, namespace, and api_key. The handler side and the
+# caller side load DIFFERENT profiles, which is how they end up with different credentials — even
+# when they live in separate Temporal Cloud accounts.
+#
+# Read by both the Java SDK (via envconfig) and the temporal CLI:
+#   temporal --config-file ./temporal.toml --profile handler workflow list
+#
+# WARNING: do not set TEMPORAL_API_KEY / TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE in the environment.
+# envconfig applies env vars ON TOP OF the loaded profile, so any of them overrides every profile
+# with a single value and quietly collapses the two identities into one.
+
+# ── Temporal Cloud (the defaults: HANDLER_PROFILE=handler, CALLER_PROFILE=caller) ──
+
+[profile.handler]
+address = "us-east-1.aws.api.temporal.io:7233"
+namespace = "playground-nexus-handler.yy98u"
+api_key = "<handler-namespace-api-key>"
+
+[profile.caller]
+address = "us-east-1.aws.api.temporal.io:7233"
+namespace = "playground-nexus-caller.yy98u"
+api_key = "<caller-namespace-api-key>"
+
+# ── Local dev server: select with HANDLER_PROFILE / CALLER_PROFILE (see .env.local.example) ──
+# No api_key, so TLS stays off.
+
+[profile.handler-local]
+address = "localhost:7233"
+namespace = "hello-nexus-basic-handler-namespace"
+
+[profile.caller-local]
+address = "localhost:7233"
+namespace = "java-nexus-caller-ns"

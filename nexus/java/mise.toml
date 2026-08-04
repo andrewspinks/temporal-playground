@@ -1,0 +1,30 @@
+[tools]
+# Pinned: the root mise.toml uses java="latest" (26), which breaks the Gradle 8.10.2 wrapper.
+java = "21"
+
+[env]
+# Connection config lives in temporal.toml, one profile per role, each with its own api_key.
+# Copy temporal.toml.example to temporal.toml. Both the SDK and the temporal CLI read this path.
+TEMPORAL_CONFIG_FILE = "{{config_root}}/temporal.toml"
+
+# Optional. Only needed to select non-default profiles — see .env.local.example.
+#
+# Do NOT put TEMPORAL_API_KEY / TEMPORAL_ADDRESS / TEMPORAL_NAMESPACE in .env: envconfig applies
+# env vars on top of the profile, so they override every profile with one value.
+_.file = ".env"
+
+[tasks.build]
+description = "Compile. Run once before starting workers in parallel."
+run = "./gradlew classes"
+
+[tasks.handler]
+description = "Nexus handler worker: serves JobService, hosts the workflow + activity"
+run = "./gradlew -q run -PmainClass=io.temporal.nexusjobs.handler.NexusHandlerWorker"
+
+[tasks.caller-worker]
+description = "Nexus caller worker (long-running, caller namespace)"
+run = "./gradlew -q run -PmainClass=io.temporal.nexusjobs.caller.CallerWorker"
+
+[tasks.caller]
+description = "Start the caller workflow, which invokes both Nexus operations, then exit"
+run = "./gradlew -q run -PmainClass=io.temporal.nexusjobs.caller.CallerStarter"
