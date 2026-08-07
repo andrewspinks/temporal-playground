@@ -1,0 +1,35 @@
+# envconfig looks for ~/.config/temporalio/temporal.toml by default, so the
+# *-cloud recipes point it at the temporal.toml in this directory instead.
+config := justfile_directory() / "temporal.toml"
+
+# Run the worker against the local dev server
+worker:
+    go run ./worker
+
+# Run the worker against a temporal.toml profile (Temporal Cloud)
+worker-cloud profile="spinks":
+    TEMPORAL_CONFIG_FILE={{config}} TEMPORAL_PROFILE={{profile}} go run ./worker
+
+# Start a workflow execution against the local dev server
+start:
+    go run ./starter
+
+# Start a workflow execution against a temporal.toml profile (Temporal Cloud)
+start-cloud profile="spinks":
+    TEMPORAL_CONFIG_FILE={{config}} TEMPORAL_PROFILE={{profile}} go run ./starter
+
+# List recent workflows on a temporal.toml profile
+list-cloud profile="spinks":
+    temporal --config-file {{config}} --profile {{profile}} workflow list --limit 10
+
+# Build all binaries
+build:
+    go build ./...
+
+# Run tests
+test:
+    go test ./...
+
+# Tidy dependencies
+tidy:
+    go mod tidy
