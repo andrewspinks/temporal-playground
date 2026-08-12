@@ -1,0 +1,19 @@
+<configuration>
+  <appender name="STDOUT" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{HH:mm:ss.SSS} %-5level %logger{24} - %msg%n</pattern>
+    </encoder>
+  </appender>
+
+  <!--
+    Off by design. The stuck workflow task retries, and the SDK logs a full
+    NonDeterministicException stack trace per attempt, which buries the reproducer's own output.
+    The failure is read back from history and printed by NdeReproducer instead.
+    Set this to WARN to watch the SDK report the failure itself.
+  -->
+  <logger name="io.temporal" level="OFF"/>
+
+  <root level="WARN">
+    <appender-ref ref="STDOUT"/>
+  </root>
+</configuration>

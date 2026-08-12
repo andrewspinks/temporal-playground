@@ -1,0 +1,30 @@
+plugins {
+    id 'java'
+    id 'application'
+}
+
+sourceCompatibility = '11'
+targetCompatibility = '11'
+
+repositories {
+    mavenCentral()
+}
+
+// The whole point of this project: run the SAME workflow code on two SDK versions.
+//   -PsdkVersion=1.33.0  -> getVersion still yields, the NDE reproduces
+//   -PsdkVersion=1.34.0+ -> SKIP_YIELD_ON_VERSION is adopted by default (PR #2819), no NDE
+def temporalVersion = project.properties['sdkVersion'] ?: '1.36.1'
+
+dependencies {
+    implementation "io.temporal:temporal-sdk:$temporalVersion"
+    implementation 'ch.qos.logback:logback-classic:1.5.6'
+}
+
+application {
+    mainClass = project.properties['mainClass'] ?: 'io.temporal.samples.ndeinterleave.NdeReproducer'
+}
+
+tasks.named('run') {
+    // Report which SDK version this run actually resolved, so the output can never be ambiguous.
+    systemProperty 'repro.sdkVersion', temporalVersion
+}

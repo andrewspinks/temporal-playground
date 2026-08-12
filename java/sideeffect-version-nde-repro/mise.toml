@@ -1,0 +1,24 @@
+# Target is taken from TEMPORAL_ADDRESS (default localhost:7233) — no .env setup needed.
+# Needs a Temporal server: `just server` from the playground root, or a docker-compose stack.
+
+[tasks.setup]
+description = "Register the custom search attribute the workflow upserts (idempotent)"
+run = "temporal operator search-attribute create --name CustomKeywordField --type Keyword 2>/dev/null || true"
+
+[tasks.repro-old]
+description = "SDK 1.33.0 — the workflow task fails on non-determinism and the execution is stuck"
+depends = ["setup"]
+run = "./gradlew -q run -PsdkVersion=1.33.0"
+
+[tasks.repro-new]
+description = "SDK 1.36.1 — same code, the workflow completes (fix from PR #2819, released in 1.34.0)"
+depends = ["setup"]
+run = "./gradlew -q run -PsdkVersion=1.36.1"
+
+[tasks.repro-both]
+description = "Run the broken version then the fixed version, sequentially"
+depends = ["setup"]
+run = [
+    "./gradlew -q run -PsdkVersion=1.33.0",
+    "./gradlew -q run -PsdkVersion=1.36.1",
+]
