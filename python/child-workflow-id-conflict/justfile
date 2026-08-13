@@ -1,0 +1,11 @@
+# Start the worker (hosts both TargetWorkflow and ParentWorkflow)
+worker:
+    uv run python -m app.worker
+
+# Run the demonstration: client USE_EXISTING dedupes, child start does not
+start:
+    uv run python -m app.starter
+
+# Lint
+lint:
+    uv run ruff check .

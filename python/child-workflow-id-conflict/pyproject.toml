@@ -1,0 +1,7 @@
+[project]
+name = "child-workflow-id-conflict"
+version = "0.1.0"
+requires-python = ">=3.14"
+dependencies = [
+    "temporalio==1.27.2",
+]
