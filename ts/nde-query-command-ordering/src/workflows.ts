@@ -1,106 +1,193 @@
 /**
- * RECONSTRUCTION OF THE CUSTOMER'S WORKFLOW.
+ * PORT OF THE CUSTOMER'S WORKFLOW.
  *
- * Everything in this file is inferred from the three production histories -- the signal names,
- * query name and activity name are the real ones; the code shape is a guess that matches the
- * observed command patterns. Nothing here is diagnostic scaffolding, with the two exceptions
- * marked `TEST ONLY` below.
+ * Close port of `playground/ts/customer-nde/workflow-source/self-contained-copy.ts`, which is a
+ * faithful inline of their production source. Signal, query and activity names are the real ones.
+ * Only our naming convention differs, plus the deliberate omissions noted below.
  *
- * The command tracer lives in `tracer.ts` and is NOT part of this reconstruction.
+ * Not ported, to keep the repro small: all `log.info` calls, the `continueAsNew` tail, luxon
+ * (the millisecond literals are already inlined), and the activity timeouts other than
+ * startToCloseTimeout. None of them can affect the order commands are pushed in.
+ *
+ * The command tracer lives in `tracer.ts` and is NOT part of this port.
  */
 import {
   condition,
   defineQuery,
   defineSignal,
   getExternalWorkflowHandle,
+  patched,
   proxyActivities,
   setHandler,
+  sleep,
+  workflowInfo,
 } from '@temporalio/workflow';
 import type * as activities from './activities';
 
-// --- Signals (names taken verbatim from the histories) -----------------------------------------
+export type ProviderQueueSignal = {
+  jobId: string;
+  entityWorkflowId: string;
+  maxConcurrentJobs: number;
+  isPriority?: boolean;
+};
+export type JobCompleteSignal = { jobId: string };
 
-/** Enqueues a job. The customer sends this via signalWithStart, thousands per day per queue. */
-export const publishToProviderQueueSignal = defineSignal<[string]>('publish_to_provider_queue');
+export type ProviderQueueArgs = {
+  maxConcurrentJobs: number;
+  publishQueue?: ProviderQueueSignal[];
+  runningJobs: string[];
+};
 
-/** Sent BY providerQueueWorkflow TO a connection workflow. This is the command that gets misordered. */
-export const executeJobSignal = defineSignal<[string]>('execute_job');
+// --- Signals (names verbatim from the customer's constants) ------------------------------------
 
-/** TEST ONLY. Production entity workflows run forever; this just lets a trial end. */
-export const stopSignal = defineSignal('stop');
+export const publishToProviderQueueSignal = defineSignal<[ProviderQueueSignal]>('publish_to_provider_queue');
+export const priorityPublishToProviderQueueSignal = defineSignal<[ProviderQueueSignal]>(
+  'priority_publish_to_provider_queue',
+);
+export const jobCompletedSignal = defineSignal<[JobCompleteSignal]>('job_completed');
+export const jobFailedSignal = defineSignal<[JobCompleteSignal]>('job_failed');
 
-// --- Queries -----------------------------------------------------------------------------------
+/** Sent BY providerQueueWorkflow TO an entity workflow. This is the command that gets misordered. */
+export const executeJobSignal = defineSignal<[{ jobId: string }]>('execute_job');
+
+// --- Query ---------------------------------------------------------------------------------------
 
 /**
- * The input that is NEVER written to history. Since Aug 7 the customer sends this immediately
- * before every enqueue, so queries arrive in the same bursts as the signals.
+ * The input that is NEVER written to history. Since Aug 7 the customer runs this depth check
+ * immediately before every enqueue signalWithStart.
  */
-export const providerQueueJobsQuery = defineQuery<number>('provider_queue_jobs');
+export const providerQueueJobsQuery = defineQuery('provider_queue_jobs');
 
-// --- Activities --------------------------------------------------------------------------------
+const EMIT_PROVIDER_QUEUE_METRICS = 'emit-provider-queue-metrics';
+const EXECUTE_JOB = 'execute_job';
 
 const { emitProviderQueueMetrics } = proxyActivities<typeof activities>({
-  startToCloseTimeout: '1 minute',
+  startToCloseTimeout: 28_800_000, // 8h, as in production
+  retry: { maximumAttempts: 8 },
 });
 
-/** TEST ONLY knobs. Not modelling anything the customer wrote -- see `handlerHops`. */
-export interface TestKnobs {
-  /**
-   * Number of `await`s the signal handler performs before scheduling its activity.
-   *
-   * This is the experimental lever, not production behaviour. It shifts the activity commands
-   * later in the microtask drain relative to the dispatcher's external-signal command, which is
-   * what decides where S lands among the As. See the README table.
-   */
-  handlerHops: number;
-}
-
 /**
- * Two independent coroutines push commands into the same Workflow Task:
+ * Three command sources feed the same Workflow Task:
  *
- *   1. each `publish_to_provider_queue` handler schedules one activity -> `scheduleActivity`      (A)
- *   2. the dispatcher, parked on `condition()`, signals a connection   -> `signalExternalWorkflow` (S)
+ *   1. each publish handler schedules a metrics activity            -> `scheduleActivity`       (A)
+ *   2. each job_completed / job_failed handler does the same        -> `scheduleActivity`       (A)
+ *   3. the dispatcher, parked on `condition()`, signals an entity   -> `signalExternalWorkflow` (S)
+ *      and then schedules a metrics activity of its own             -> `scheduleActivity`       (A)
  *
- * Neither pushes its command inline -- both travel through async interceptor chains -- so the
- * commands are emitted during the microtask drain when the SDK exits the workflow VM. Their
- * relative order is the thing that diverges on replay in production.
- *
- * No concurrency limit is modelled: `signalExternalWorkflow` only resolves once the server confirms
- * it (a later Workflow Task), so this loop already emits at most one S per task -- exactly what the
- * production histories show (ev 1398 -> 1401 -> 1402).
+ * `scheduleActivity` is pushed synchronously at call time, so within a single activation every
+ * handler's A is pushed during the synchronous job loop and S can only follow in the microtask
+ * drain -- S is necessarily last. The corrupted production tasks recorded S mid-batch, which means
+ * those Workflow Tasks were delivered as more than one activation. See the plan/README.
  */
-export async function providerQueueWorkflow(
-  connectionWorkflowId: string,
-  test: TestKnobs = { handlerHops: 0 },
-): Promise<void> {
-  const queue: string[] = [];
-  let stopped = false;
+export async function providerQueueWorkflow({
+  maxConcurrentJobs,
+  publishQueue = [],
+  runningJobs = [],
+}: ProviderQueueArgs): Promise<void> {
+  let maximumConcurrentJobs = maxConcurrentJobs;
 
-  setHandler(providerQueueJobsQuery, () => queue.length);
-  setHandler(stopSignal, () => void (stopped = true)); // TEST ONLY
+  const queueSignalHandler = (isPriority: boolean) => {
+    return async (args: ProviderQueueSignal) => {
+      // Customer writes this as a ternary expression statement; if/else is identical and
+      // keeps eslint's no-unused-expressions happy.
+      if (isPriority) publishQueue.unshift({ ...args, isPriority });
+      else publishQueue.push({ ...args, isPriority });
 
-  setHandler(publishToProviderQueueSignal, async (job) => {
-    queue.push(job);
-    for (let i = 0; i < test.handlerHops; i++) await Promise.resolve(); // TEST ONLY
-    void emitProviderQueueMetrics(queue.length); // command A, one per signal handled
-  });
+      maximumConcurrentJobs = args.maxConcurrentJobs;
 
-  // The dispatcher.
-  while (!stopped) {
-    await condition(() => queue.length > 0 || stopped);
-    if (stopped) break;
-    const job = queue.shift() as string;
-    await getExternalWorkflowHandle(connectionWorkflowId).signal(executeJobSignal, job); // command S
+      if (patched(EMIT_PROVIDER_QUEUE_METRICS)) {
+        await emitProviderQueueMetrics({
+          workflowId: workflowInfo().workflowId,
+          runningJobsCount: runningJobs.length,
+          enqueuedJobsCount: publishQueue.length,
+        }).catch(() => undefined);
+      }
+    };
+  };
+
+  setHandler(publishToProviderQueueSignal, queueSignalHandler(false));
+  setHandler(priorityPublishToProviderQueueSignal, queueSignalHandler(true));
+
+  const removeFromRunningJobs = () => async (signal: JobCompleteSignal) => {
+    const index = runningJobs.indexOf(signal.jobId);
+    if (index > -1) {
+      runningJobs.splice(index, 1);
+
+      if (patched(EMIT_PROVIDER_QUEUE_METRICS)) {
+        await emitProviderQueueMetrics({
+          workflowId: workflowInfo().workflowId,
+          runningJobsCount: runningJobs.length,
+          enqueuedJobsCount: publishQueue.length,
+        }).catch(() => undefined);
+      }
+    }
+  };
+
+  setHandler(jobCompletedSignal, removeFromRunningJobs());
+  setHandler(jobFailedSignal, removeFromRunningJobs());
+
+  setHandler(providerQueueJobsQuery, () => ({
+    maxConcurrentJobs,
+    runningJobs,
+    runningJobsCount: runningJobs.length,
+    publishQueueJobs: publishQueue.map((job) => job.jobId),
+    publishQueueCount: publishQueue.length,
+  }));
+
+  while (!workflowInfo().continueAsNewSuggested) {
+    await condition(() => shouldProcessNextJob({ publishQueue, runningJobs, maximumConcurrentJobs }));
+
+    if (publishQueue.length === 0) break;
+
+    const next = publishQueue.shift();
+    if (!next) continue;
+
+    const { jobId, entityWorkflowId } = next;
+
+    try {
+      const handle = getExternalWorkflowHandle(entityWorkflowId);
+      await handle.signal(EXECUTE_JOB, { jobId }); // command S
+      // NOTE: this runs only once the external signal resolves, i.e. in a LATER Workflow Task.
+      // That is why runningJobsCount is unchanged across the whole of a corrupted task.
+      runningJobs.push(jobId);
+
+      if (patched(EMIT_PROVIDER_QUEUE_METRICS)) {
+        await emitProviderQueueMetrics({
+          workflowId: workflowInfo().workflowId,
+          runningJobsCount: runningJobs.length,
+          enqueuedJobsCount: publishQueue.length,
+        }).catch(() => undefined);
+      }
+    } catch {
+      // production logs and carries on
+    }
   }
 }
 
 /**
- * Stands in for the customer's connection workflows -- the target of `execute_job`. It only needs
- * to exist and accept the signal.
+ * Verbatim from the customer. The second clause matters: when nothing is queued and nothing is
+ * running the condition is true, the loop breaks and the workflow ends -- which is how a trial
+ * finishes without needing a synthetic stop signal.
  */
-export async function connectionWorkflow(): Promise<void> {
+function shouldProcessNextJob({
+  publishQueue,
+  runningJobs,
+  maximumConcurrentJobs,
+}: {
+  publishQueue: ProviderQueueSignal[];
+  runningJobs: string[];
+  maximumConcurrentJobs: number;
+}): boolean {
+  return (
+    (publishQueue.length > 0 && runningJobs.length < maximumConcurrentJobs) ||
+    (publishQueue.length === 0 && runningJobs.length === 0)
+  );
+}
+
+/** The customer's `entityStub`: receives `execute_job`. */
+export async function entityWorkflow(): Promise<void> {
   setHandler(executeJobSignal, () => {
-    // the real one runs the job; here we only need a valid signal target
+    // the real one runs the job
   });
-  await condition(() => false);
+  await sleep(7_200_000);
 }

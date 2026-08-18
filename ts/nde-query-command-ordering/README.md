@@ -9,158 +9,104 @@ HistoryEvent(id: 1398, SignalExternalWorkflowExecutionInitiated)
 
 Three `providerQueue` entity workflows became permanently unreplayable and were terminated. The
 divergence is pure **command ordering**: on replay the SDK emits `scheduleActivity` where history
-recorded `signalExternalWorkflowExecution`. Same build and SDK version before and after — not a
-deploy.
+recorded `signalExternalWorkflowExecution`. Same build and SDK version before and after — not a deploy.
 
-## Reconstruction vs. instrumentation
+## Port vs. instrumentation
 
-| File                | What it is                                                                                                                                                                                     |
-| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `src/workflows.ts`  | **Reconstruction.** The customer's workflow, inferred from the histories. Signal/query/activity names are the real ones; the code shape is a guess that matches the observed command patterns. |
-| `src/activities.ts` | **Reconstruction.** No-op `emitProviderQueueMetrics`.                                                                                                                                          |
-| `src/tracer.ts`     | **Instrumentation.** Interceptor that prints the command list of every activation.                                                                                                             |
-| `src/shared.ts`     | Connection config + the `tracing()` helper that wires the tracer into a Worker.                                                                                                                |
-| `src/worker.ts`     | Worker (`pnpm start`).                                                                                                                                                                         |
-| `src/starter.ts`    | Starts just the two workflows with fixed IDs, then prints the CLI commands, so you can drive signals and the query by hand (`pnpm starter`).                                                   |
-| `src/client.ts`     | The automated experiment (`pnpm workflow`).                                                                                                                                                    |
-| `src/replay.ts`     | Replay one saved history with the tracer on (`pnpm replay <file>`).                                                                                                                            |
+| File                | What it is                                                                                                    |
+| ------------------- | ------------------------------------------------------------------------------------------------------------- |
+| `src/workflows.ts`  | **Port** of the customer's real source (`playground/ts/customer-nde/workflow-source/self-contained-copy.ts`). |
+| `src/activities.ts` | **Port.** No-op `emitProviderQueueMetrics` with the real signature.                                           |
+| `src/tracer.ts`     | **Instrumentation.** Prints the command list of every activation.                                             |
+| `src/shared.ts`     | Connection config + the `tracing()` helper.                                                                   |
+| `src/worker.ts`     | Worker (`pnpm start`).                                                                                        |
+| `src/starter.ts`    | Starts just the two workflows with fixed IDs and prints CLI commands (`pnpm starter`).                        |
+| `src/client.ts`     | The automated experiment (`pnpm workflow`).                                                                   |
+| `src/replay.ts`     | Replay one saved history with the tracer on (`pnpm replay <file>`).                                           |
+| `analyze.py`        | Reads worker logs and reports Workflow Tasks delivered as more than one activation.                           |
 
-**Nothing in the histories implies the customer uses interceptors or sinks** — their workflow tasks
-record `langUsedFlags: [2]` only, meaning no interceptor-related SDK flag was ever queried. The
-tracer is ours, purely so we can read command order directly instead of inferring it from event JSON.
-It lives in its own module and is registered separately via
-`interceptors: { workflowModules: [require.resolve('./tracer')] }`, so it never mixes into the
-reconstruction.
+The customer runs **no interceptors and no sinks** (their worker options confirm it, and their
+histories record `langUsedFlags: [2]` only). The tracer is ours; it lives in its own module and is
+registered via `interceptors: { workflowModules: [...] }`. Note the customer ships a prebuilt
+`workflowBundle`, for which that option is ignored — our `workflowsPath` setup is a deliberate
+deviation that makes the tracer possible.
 
-Two deviations inside `workflows.ts` are marked `TEST ONLY` in the source: `stopSignal` (production
-entity workflows run forever) and `TestKnobs.handlerHops` (the experimental lever, below).
+Deliberately not ported: `log.info` calls, the `continueAsNew` tail, luxon, activity timeouts other
+than `startToCloseTimeout`, and the AES payload codec (it runs outside the workflow VM, so it cannot
+reorder in-VM command pushes).
 
-## Names
+## The mechanism
 
-| Identifier                     | Kind     | Wire name                   |
-| ------------------------------ | -------- | --------------------------- |
-| `providerQueueWorkflow`        | workflow | —                           |
-| `connectionWorkflow`           | workflow | — (target of `execute_job`) |
-| `publishToProviderQueueSignal` | signal   | `publish_to_provider_queue` |
-| `executeJobSignal`             | signal   | `execute_job`               |
-| `stopSignal`                   | signal   | `stop` (TEST ONLY)          |
-| `providerQueueJobsQuery`       | query    | `provider_queue_jobs`       |
-| `emitProviderQueueMetrics`     | activity | —                           |
+Three command sources feed one Workflow Task:
+
+- each `publish_to_provider_queue` handler schedules a metrics activity → `scheduleActivity` (**A**)
+- each `job_completed` / `job_failed` handler does the same, **if the jobId was running** (**A**)
+- the dispatcher, parked on `condition()`, signals an entity workflow → `signalExternalWorkflow`
+  (**S**), then schedules a metrics activity of its own (**A**)
+
+`proxyActivities` → `scheduleActivity` → `scheduleActivityNextHandler` pushes the command
+**synchronously at call time**, and there are no interceptors to add a yield point. So within one
+activation every handler's `A` is pushed during the synchronous job loop, and `S` can only follow in
+the microtask drain. **`S` is necessarily last.** Confirmed here:
+
+```
+activate wf=... hl=... replaying=false jobs=[initializeWorkflow, signalWorkflow x12]
+  commands=<setPatchMarker>AAAAAAAAAAAAS
+```
+
+### So how did production record `S` mid-batch?
+
+A Workflow Task's recorded commands are the concatenation of **every activation completion** for that
+task. If the signal batch is split across two activations, the dispatcher's `S` lands at the end of
+the first chunk. That reproduces all three corrupted tasks exactly:
+
+| History            | activation 1                   | activation 2         | = recorded  |
+| ------------------ | ------------------------------ | -------------------- | ----------- |
+| `3502a8d8` ev 1393 | 4 signals → `AAAA` + `S`       | 2 signals → `AA`     | `AAAASAA`   |
+| `95f6d662` ev 760  | `job_completed`+1 → `AA` + `S` | 6 signals → `AAAAAA` | `AASAAAAAA` |
+| `b6fd434d` ev 1720 | 1 signal → `A` + `S`           | 1 signal → `A`       | `ASA`       |
+
+Independent confirmation: in `3502a8d8` the metrics activities at events **150 and 151 are
+byte-identical ciphertext**. The real code explains it — `runningJobs.push(jobId)` runs _after_
+`await handle.signal(...)` resolves, i.e. in a later Workflow Task, so `runningJobsCount` is unchanged
+across the whole task while `enqueuedJobsCount` goes `4 → (dispatch shifts to 3) → 4` again.
+
+Replay delivers that task as **one** activation → `AAAAAAS` → mismatch at the `S` position.
+
+**The open question is now precise: what made the live run deliver one Workflow Task as two
+activations, when replay delivers one?**
 
 ## Run
 
 ```sh
-just server                       # from the playground root
+temporal server start-dev --port 7234        # or use your own server
+export TEMPORAL_ADDRESS=127.0.0.1:7234
 pnpm install
-WORKER_ID=1 pnpm start            # terminal 2 (run 2-3 of these to model a worker fleet)
-pnpm workflow                     # terminal 3 -- the automated experiment
+WORKER_ID=1 pnpm start                       # run 2+ to model the customer's multi-pod fleet
+pnpm workflow                                # the automated experiment
+python3 analyze.py worker1.log worker2.log   # hunt for split Workflow Tasks
 ```
 
-The client runs in three phases: start one `connectionWorkflow`; run `ATTEMPTS` independent trials
-that each burst signals at a fresh `providerQueueWorkflow` while a query storm runs; then replay
-every captured history against the same code.
+Knobs: `QUERIES=on|off`, `JOBS`, `ATTEMPTS`, `QUERIERS`, `MAX_CONCURRENT`, `CACHE`, `WORKER_ID`,
+`TEMPORAL_ADDRESS`.
 
-Knobs: `QUERIES=on|off`, `JOBS`, `ATTEMPTS`, `QUERIERS`, `HANDLER_HOPS`, `CACHE`, `WORKER_ID`.
+`pnpm starter` starts the two workflows with fixed IDs so you can drive signals and the query by hand;
+it prints ready-to-paste CLI commands and the batching recipe.
 
-### Driving it by hand
+## Status
 
-`pnpm starter` starts just the two workflows with fixed IDs (`provider-queue-demo`,
-`connection-demo`) and prints ready-to-paste CLI commands. With the worker running, one
-`publish_to_provider_queue` signal traces `commands=AS`.
+The port reproduces production's command vocabulary — `AS` dominant, plus `S`-only and `A`-only tasks
+from the dispatcher's post-dispatch metrics activity, and `<setPatchMarker>` on the first patched task.
 
-To get several signals into **one** Workflow Task — the precondition for the bug — nothing must be
-polling while you send them:
+It does **not** yet reproduce the NDE. Across runs with queries on and off, 2 workers, and bursts up to
+12 signals, `analyze.py` reports **zero** Workflow Tasks delivered as more than one activation, and
+every captured history replays clean.
 
-```sh
-# 1. worker stopped
-PROVIDER_QUEUE_ID=demo-1 CONNECTION_ID=conn-1 pnpm starter
-# 2. send a few signals (still no worker)
-for i in 1 2 3 4 5; do
-  temporal workflow signal --address 127.0.0.1:7233 --workflow-id demo-1 \
-    --name publish_to_provider_queue --input "\"job-$i\""
-done
-# 3. now start the worker
-pnpm start
-```
+Next levers, in order:
 
-The trace shows the whole batch in one activation:
-
-```
-activate replaying=false jobs=[initializeWorkflow, signalWorkflow x5]
-  commands=AAAAAS
-```
-
-Repeat with `HANDLER_HOPS=2` and fresh IDs and the same batch becomes `ASAAAA`.
-
-> The address is passed explicitly on purpose. If anything else is bound to `:7233` over IPv6 (a
-> Temporal in Docker, for instance), `localhost` can resolve to a different server for the SDK than
-> for the CLI, which shows up as spurious `workflow not found` errors.
-
-## The mechanism
-
-Two independent coroutines push commands into the same Workflow Task:
-
-- each `publish_to_provider_queue` handler schedules one activity → `scheduleActivity` (**A**)
-- the dispatcher, parked on `condition()`, signals a connection → `signalExternalWorkflow` (**S**)
-
-Neither pushes its command inline — both travel through async interceptor chains — so commands are
-emitted during the microtask drain when the SDK exits the workflow VM.
-
-`HANDLER_HOPS` inserts N `await`s in the signal handler before it schedules its activity. With a
-12-signal Workflow Task:
-
-| `HANDLER_HOPS` | commands emitted |
-| -------------- | ---------------- |
-| 1              | `AAAAAAAAAAAAS`  |
-| 2              | `ASAAAAAAAAAAA`  |
-| 3              | `SAAAAAAAAAAAA`  |
-
-**One extra microtask hop walks S across the entire batch.** S's position is a pure function of the
-relative microtask depth of the two coroutines — nothing else. `HANDLER_HOPS=2` reproduces
-production's exact shape (`ASA`, history `b6fd434d` ev 1720).
-
-That is also why this is an ordering bug rather than a missing-command bug, and why it only ever bit
-multi-signal Workflow Tasks: with one signal there is a single A, so there is nothing for S to be
-misordered against. In the real histories every corrupted task was multi-signal and every
-single-signal task was fine.
-
-## What this does NOT yet reproduce
-
-The NDE itself. Across ~150 trials — queries on and off, 1 and 3 workers, `CACHE=0` and default,
-bursts up to 12 signals, `HANDLER_HOPS` 0–3 — **every captured history replayed clean**. Wherever S
-landed, it landed there identically on replay.
-
-So a query storm alone does not perturb the ordering in this shape. That matches the SDK source: by
-the time a query activation runs, the previous activation has already drained its microtasks
-(`tryUnblockConditionsAndMicrotasks` loops until quiescent), so there is normally nothing left for
-the query's VM exit to advance.
-
-### The untested cell
-
-The strongest signal in the real histories is that **3 of 3 corrupted Workflow Tasks ran on a worker
-that had just rebuilt the workflow from history**, while 6 of 6 multi-signal tasks on a warm worker
-were fine. This repro has not hit _cold rebuild **and** multi-signal batch_ together:
-
-- `CACHE=0` makes every task a cold rebuild, but also makes queries slow, which serialises the burst
-  — so batches never form.
-- Default cache gives big batches but the workflow stays warm.
-
-Next step: keep the worker fast but apply cache pressure (a modest `maxCachedWorkflows` with many
-concurrent workflows) so eviction happens _between_ bursts.
-
-## Open questions for the customer
-
-The reconstruction is inferred from command patterns, not their code. The `HANDLER_HOPS` result shows
-the answers change the outcome materially:
-
-1. Where is `execute_job` emitted from — a `condition()` dispatcher loop, the `job_completed`
-   handler, or a `void`ed async helper?
-2. Is the `publish_to_provider_queue` handler `async`, and is the metrics activity awaited or
-   fire-and-forget? **How many `await`s run before it schedules the activity is precisely what sets
-   S's position.**
-3. The `provider_queue_jobs` query handler body — sync snapshot, or `async`?
-4. Any custom interceptors? Every interceptor adds yield points, and `SdkFlags` 3–6 exist only to
-   patch NDEs caused by interceptor yield points changing.
-5. Worker `maxCachedWorkflows` / `reuseV8Context` / pod count.
-6. A pre-Aug-7 history containing a multi-signal Workflow Task — if those always show S last, that
-   confirms the queries changed recorded command order, with no repro needed.
+1. Cache pressure. The customer's `entity-queue` is shared with many other workflow types at high
+   volume, so their providerQueue workflows are evicted and rebuilt far more often than ours are.
+   All three corrupted tasks ran on a worker that had just rebuilt from history.
+2. Query timing. Queries ride on Workflow Tasks and never appear in history; a query arriving
+   mid-task is the most plausible cause of a second activation.
+3. Scale — production hit this ~3 times across thousands of bursts per day.

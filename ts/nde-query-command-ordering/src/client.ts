@@ -1,9 +1,9 @@
 /**
  * The starter. Runs the experiment in three phases:
  *
- *   1. start one connectionWorkflow -- the target for `execute_job`
- *   2. run ATTEMPTS independent trials; each starts a fresh providerQueueWorkflow, hammers it, and
- *      captures its complete history
+ *   1. start one entityWorkflow -- the target for `execute_job`
+ *   2. run ATTEMPTS independent trials; each drives a fresh providerQueueWorkflow to completion and
+ *      captures its history
  *   3. replay every captured history against the very same workflow code
  *
  * A history that will not replay is the bug: same code, same SDK, its own history.
@@ -15,11 +15,11 @@ import { historyToJSON } from '@temporalio/common/lib/proto-utils';
 import { Worker } from '@temporalio/worker';
 import { ADDRESS, NAMESPACE, TASK_QUEUE } from './shared';
 import {
-  connectionWorkflow,
+  entityWorkflow,
+  jobCompletedSignal,
   providerQueueJobsQuery,
   providerQueueWorkflow,
   publishToProviderQueueSignal,
-  stopSignal,
 } from './workflows';
 
 type History = Parameters<typeof historyToJSON>[0];
@@ -27,58 +27,109 @@ type Trial = { workflowId: string; history: History };
 
 /** QUERIES=off is the control arm: identical run with the unrecorded input removed. */
 const QUERIES = process.env.QUERIES !== 'off';
-/** Signals per burst. Needs to be big enough that several land in one Workflow Task. */
+/** Enqueues per burst. Needs to be big enough that several land in one Workflow Task. */
 const JOBS = Number(process.env.JOBS ?? 12);
 /** Independent trials. */
 const ATTEMPTS = Number(process.env.ATTEMPTS ?? 25);
 /** Concurrent queriers, modelling the customer's many parallel producers. */
 const QUERIERS = Number(process.env.QUERIERS ?? 6);
-/** See TestKnobs.handlerHops in workflows.ts -- the experimental lever. */
-const HANDLER_HOPS = Number(process.env.HANDLER_HOPS ?? 0);
+/** High enough that the whole burst can dispatch without waiting on job_completed. */
+const MAX_CONCURRENT = Number(process.env.MAX_CONCURRENT ?? JOBS);
 
 const HISTORY_DIR = path.resolve(__dirname, '../../../histories');
 const OUT_FILE = path.join(HISTORY_DIR, 'nde-query-ordering-1.16.1.json');
 
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
 /**
- * The production traffic pattern: a query immediately before every enqueue, from many producers at
- * once.
+ * The Aug 7 traffic pattern: a depth-check query immediately before every enqueue signalWithStart,
+ * from many producers at once.
  *
- * Modelled as a query storm running alongside a tight signal burst rather than
- * `await query(); await signal()` per job -- serialising it that way spaces the signals out, and we
- * would never get several into one Workflow Task, which is the precondition for the bug.
+ * Modelled as a query storm running alongside a tight burst of signalWithStart calls rather than
+ * `await query(); await signalWithStart()` per job -- serialising it that way spaces the enqueues
+ * out, and we would never get several signals into one Workflow Task, which is the precondition
+ * for the bug.
  */
-async function burstSignalsWhileQuerying(handle: WorkflowHandle): Promise<void> {
+async function burstEnqueuesWhileQuerying(
+  client: Client,
+  workflowId: string,
+  entityWorkflowId: string,
+  jobIds: string[],
+): Promise<WorkflowHandle> {
   let querying = QUERIES;
 
   const queryStorm = Promise.all(
     Array.from({ length: QUERIES ? QUERIERS : 0 }, async () => {
-      // A timed-out query only means the worker is saturated; not interesting.
-      while (querying) await handle.query(providerQueueJobsQuery).catch(() => undefined);
+      // A query against a not-yet-started workflow, or a timed-out one, is not interesting.
+      while (querying) {
+        await client.workflow
+          .getHandle(workflowId)
+          .query(providerQueueJobsQuery)
+          .catch(() => undefined);
+      }
     }),
   );
 
-  await Promise.all(Array.from({ length: JOBS }, (_, j) => handle.signal(publishToProviderQueueSignal, `job-${j}`)));
+  const handles = await Promise.all(
+    jobIds.map((jobId) =>
+      client.workflow.signalWithStart(providerQueueWorkflow, {
+        workflowId,
+        taskQueue: TASK_QUEUE,
+        args: [{ maxConcurrentJobs: MAX_CONCURRENT, runningJobs: [] }],
+        signal: publishToProviderQueueSignal,
+        signalArgs: [{ jobId, entityWorkflowId, maxConcurrentJobs: MAX_CONCURRENT }],
+      }),
+    ),
+  );
 
   querying = false;
   await queryStorm;
+  return handles[0];
 }
 
 /**
- * One trial = one fresh workflow. Fresh each time so the trials are independent and each history
- * stays short enough that replaying it is cheap.
+ * Complete every job so the workflow's own idle-empty condition ends it.
+ *
+ * job_completed for a job that is still queued is a no-op (the id is not in runningJobs yet), so
+ * this loops: complete whatever is currently running, let the dispatcher pull more off the queue,
+ * repeat until both the queue and runningJobs are empty.
  */
-async function runTrial(client: Client, connectionWorkflowId: string, workflowId: string): Promise<Trial> {
-  const handle = await client.workflow.start(providerQueueWorkflow, {
-    workflowId,
-    taskQueue: TASK_QUEUE,
-    args: [connectionWorkflowId, { handlerHops: HANDLER_HOPS }],
+async function drain(handle: WorkflowHandle): Promise<void> {
+  for (let i = 0; i < 200; i++) {
+    const state = (await handle.query(providerQueueJobsQuery).catch(() => undefined)) as
+      { publishQueueCount: number; runningJobs: string[] } | undefined;
+    if (!state) return;
+    if (state.publishQueueCount === 0 && state.runningJobs.length === 0) return;
+    for (const jobId of state.runningJobs) {
+      await handle.signal(jobCompletedSignal, { jobId }).catch(() => undefined);
+    }
+    await sleep(150);
+  }
+}
+
+/** Never let one wedged trial hang the whole run. */
+async function withTimeout<T>(p: Promise<T>, ms: number): Promise<T | undefined> {
+  let timer: NodeJS.Timeout;
+  const timeout = new Promise<undefined>((resolve) => {
+    timer = setTimeout(() => resolve(undefined), ms);
   });
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer));
+}
 
-  await burstSignalsWhileQuerying(handle);
+async function runTrial(client: Client, entityWorkflowId: string, workflowId: string): Promise<Trial> {
+  const jobIds = Array.from({ length: JOBS }, (_, j) => `job-${j}`);
 
-  // Run it to completion so the captured history is complete.
-  await handle.signal(stopSignal);
-  await handle.result().catch(() => undefined);
+  const handle = await burstEnqueuesWhileQuerying(client, workflowId, entityWorkflowId, jobIds);
+  await withTimeout(drain(handle), 60_000);
+  // A wedged trial still yields a usable (partial) history to replay.
+  if (
+    (await withTimeout(
+      handle.result().catch(() => undefined),
+      30_000,
+    )) === undefined
+  ) {
+    await handle.terminate('trial timed out').catch(() => undefined);
+  }
 
   return { workflowId, history: await handle.fetchHistory() };
 }
@@ -108,26 +159,26 @@ async function run() {
   const client = new Client({ connection, namespace: NAMESPACE });
 
   const runId = Date.now().toString(36);
-  const connectionWorkflowId = `connection-${runId}`;
+  const entityWorkflowId = `entity-${runId}`;
   const trials: Trial[] = [];
 
   console.log(
     `queries=${QUERIES ? 'ON' : 'off'} jobs=${JOBS} queriers=${QUERIERS} ` +
-      `attempts=${ATTEMPTS} handlerHops=${HANDLER_HOPS}\n`,
+      `attempts=${ATTEMPTS} maxConcurrentJobs=${MAX_CONCURRENT}\n`,
   );
 
   try {
     // Phase 1 -- the target for `execute_job`.
-    await client.workflow.start(connectionWorkflow, { workflowId: connectionWorkflowId, taskQueue: TASK_QUEUE });
+    await client.workflow.start(entityWorkflow, { workflowId: entityWorkflowId, taskQueue: TASK_QUEUE });
 
     // Phase 2 -- capture.
     for (let attempt = 1; attempt <= ATTEMPTS; attempt++) {
-      trials.push(await runTrial(client, connectionWorkflowId, `provider-queue-${runId}-${attempt}`));
+      trials.push(await runTrial(client, entityWorkflowId, `provider-queue-${runId}-${attempt}`));
       process.stdout.write(`\rcaptured ${attempt}/${ATTEMPTS}`);
     }
   } finally {
     await client.workflow
-      .getHandle(connectionWorkflowId)
+      .getHandle(entityWorkflowId)
       .terminate('done')
       .catch(() => undefined);
     await connection.close();
@@ -139,9 +190,8 @@ async function run() {
 
   if (failures.length === 0) {
     console.log(`  all ${trials.length} replayed clean.\n`);
-    console.log('No divergence. Compare the [w*] command strings in the worker log, then try:');
-    console.log('  HANDLER_HOPS=2 pnpm workflow     (puts S mid-batch, where a 1-hop shift matters)');
-    console.log('  JOBS=30 ATTEMPTS=50 pnpm workflow');
+    console.log('No divergence. Grep the worker log for a Workflow Task delivered as TWO activations:');
+    console.log("  grep -A1 'activate replaying=false' <worker.log>   # look for a chunk ending in S");
     return;
   }
 

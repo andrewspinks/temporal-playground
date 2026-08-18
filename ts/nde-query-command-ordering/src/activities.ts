@@ -1,7 +1,11 @@
 /**
- * No-op. It exists only so that handling a signal emits a `scheduleActivity` command,
- * mirroring the customer's `emitProviderQueueMetrics`.
+ * No-op, with the customer's real signature. It exists only so that handling a signal emits a
+ * `scheduleActivity` command.
  */
-export async function emitProviderQueueMetrics(_queueDepth: number): Promise<void> {
+export async function emitProviderQueueMetrics(_args: {
+  workflowId: string;
+  runningJobsCount: number;
+  enqueuedJobsCount: number;
+}): Promise<void> {
   // intentionally empty
 }

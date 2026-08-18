@@ -40,7 +40,12 @@ export const interceptors = (): WorkflowInterceptors => ({
           counts.set(v, (counts.get(v) ?? 0) + 1);
         }
         const jobs = [...counts].map(([v, n]) => (n > 1 ? `${v} x${n}` : v)).join(', ');
-        trace.log(`activate replaying=${workflowInfo().unsafe.isReplaying} jobs=[${jobs}]`);
+        // historyLength is set once per Workflow Task. Two activations reporting the SAME
+        // historyLength are two activations of ONE Workflow Task -- the thing we are hunting.
+        const info = workflowInfo();
+        trace.log(
+          `activate wf=${info.workflowId} hl=${info.historyLength} replaying=${info.unsafe.isReplaying} jobs=[${jobs}]`,
+        );
         return next(input);
       },
 
