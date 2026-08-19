@@ -1,0 +1,7 @@
+.venv/
+wci-forensics-out/
+__pycache__/
+*.pyc
+# local, may reference real deployments/namespaces
+tests/fixture.json
+dumps/

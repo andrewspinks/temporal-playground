@@ -1,0 +1,23 @@
+{
+  "dumps": ["./dumps"],
+  "deployment": "<deployment>",
+  "versions": {"old": "<old-build-id>", "new": "<new-build-id>"},
+  "expected": {
+    "transition_into_old_hms": "HH:MM:SS",
+    "transition_into_new_hms": "HH:MM:SS",
+    "transition_into_new_from": "<old-build-id>",
+    "old_serverless": true,
+    "old_draining_start": "HH:MM:SS.mmm",
+    "old_drained": "HH:MM:SS.mmm",
+    "old_deleted": "HH:MM:SS.mmm",
+    "old_delete_blocked": true,
+    "delete_block_times": ["HH:MM:SS", "HH:MM:SS"],
+    "invoke_total": 0,
+    "invoke_failed": 0,
+    "invoke_last_hms": "HH:MM:SS",
+    "invoke_peak_per_min": 0,
+    "invokes_after_draining_start": 0,
+    "invokes_after_drained": 0,
+    "terminal_contains": "not found"
+  }
+}
