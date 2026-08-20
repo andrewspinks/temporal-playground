@@ -5,7 +5,8 @@ from datetime import datetime, timezone
 from typing import Dict, List, Optional
 
 from .model import DeploymentAnalysis, VersionAnalysis, WciAnalysis
-from .util import DEFAULT_UI_BASE, cloud_url, dt_str, hhmmss, iso, short
+from .util import (DEFAULT_UI_BASE, cloud_event_url, cloud_url, dt_str, hhmmss,
+                   iso, short, short_error)
 
 _MIN = datetime.min.replace(tzinfo=timezone.utc)
 
@@ -33,7 +34,7 @@ def _render_validation(L, versions, wcis):
             L.append(f"- {short(b)} [{provider}]: **PASS** (last checked {dt_str(v.validation_last_check)})")
         elif v.validation_ok is False:
             any_fail = True
-            L.append(f"- {short(b)} [{provider}]: **FAILED** — {v.validation_error} "
+            L.append(f"- {short(b)} [{provider}]: **FAILED** — {short_error(v.validation_error)} "
                      f"(last checked {dt_str(v.validation_last_check)})")
         else:
             L.append(f"- {short(b)} [{provider}]: validation status unknown (no compute_status)")
@@ -43,7 +44,7 @@ def _render_validation(L, versions, wcis):
         if vf:
             any_fail = True
             L.append(f"    - {len(vf)} ValidateSpec activity failure(s); first {dt_str(vf[0][0])}: "
-                     f"{vf[0][1].splitlines()[0][:200]}")
+                     f"{short_error(vf[0][1])}")
     if versions and any_pass and not any_fail:
         L.append("")
         L.append("_All checked versions passed compute-provider validation._")
@@ -72,6 +73,7 @@ def build_report(
     link_groups: Optional[List] = None,
     ui_base: str = DEFAULT_UI_BASE,
     poller_statuses: Optional[List] = None,
+    debug: bool = False,
 ) -> tuple:
     L: List[str] = []
     blocked = _blocked_builds(dep)
@@ -134,8 +136,8 @@ def build_report(
         if w.worker_set_series:
             L.append(f"- **Worker pool size (instances)** — set via `UpdateWorkerSetSize`; last set to "
                      f"**{w.last_worker_set_size}** ({len(w.worker_set_series)} change(s)):")
-            for t, size, status, trigger in w.worker_set_series:
-                L.append(f"    - {dt_str(t)}  size={size}  ({status})  ← trigger: {trigger}")
+            for ch in w.worker_set_series:
+                L.append(f"    - {dt_str(ch.time)}  size={ch.size}  ({ch.status})  ← trigger: {ch.trigger}")
         L.append(f"- PullStats polls: {w.pullstats_count}  |  other: {w.other_activities}")
         L.append(f"- Chain terminated: {w.terminal}")
         if inv.per_minute:
@@ -148,13 +150,18 @@ def build_report(
 
     pollers_json = _render_pollers(L, poller_statuses)
 
-    links_json = _render_links(L, namespace, link_groups or [], ui_base)
+    # The timeline's run#event links cover the common case; the exhaustive per-run
+    # Cloud link listing is verbose, so only render it under --debug. It stays in
+    # summary.json regardless.
+    links_json = _links_json(namespace, link_groups or [], ui_base)
+    if debug:
+        _render_links(L, namespace, link_groups or [], ui_base)
 
     L.append("## Consolidated timeline")
-    L.append("| datetime (UTC) | source | event | run |")
+    L.append("| datetime (UTC) | source | event | run#event |")
     L.append("|---|---|---|---|")
     for e in _merged_timeline(dep, versions, wcis):
-        L.append(f"| {dt_str(e.time)} | {e.source} | {e.summary} | {e.run_id[:8]} |")
+        L.append(f"| {dt_str(e.time)} | {e.source} | {e.summary} | {_event_link(namespace, e, ui_base)} |")
     L.append("")
 
     summary = _json_summary(deployment, dep, versions, wcis, win_start, win_end, blocked)
@@ -168,7 +175,7 @@ def _warnings(versions, poller_statuses):
     w = []
     for b, v in versions.items():
         if v.validation_ok is False:
-            w.append(f"Version `{short(b)}` compute validation is **FAILING**: {v.validation_error}")
+            w.append(f"Version `{short(b)}` compute validation is **FAILING**: {short_error(v.validation_error)}")
     for st in poller_statuses:
         if st.mismatches:
             vers = sorted({p.version for p in st.mismatches})
@@ -213,30 +220,56 @@ def _render_pollers(L, poller_statuses):
     return out
 
 
-def _render_links(L, namespace, link_groups, ui_base):
-    """Append the Temporal Cloud links section; return the JSON representation."""
-    L.append("## Temporal Cloud links")
+def _links_json(namespace, link_groups, ui_base):
+    """Per-run Cloud link data for summary.json (independent of whether the
+    verbose section is rendered)."""
     out = {}
+    if not namespace or not link_groups:
+        return out
+    for label, wfid, runs in link_groups:
+        out[label] = {
+            "workflow_id": wfid,
+            "workflow_url": cloud_url(namespace, wfid, ui_base=ui_base),
+            "runs": [
+                {"run_id": r.run_id, "start": iso(r.start_time), "end": iso(r.end_time),
+                 "url": cloud_url(namespace, wfid, r.run_id, ui_base=ui_base)}
+                for r in runs
+            ],
+        }
+    return out
+
+
+def _render_links(L, namespace, link_groups, ui_base):
+    """Append the exhaustive per-run Temporal Cloud links section (--debug only)."""
+    L.append("## Temporal Cloud links")
     if not namespace:
         L.append("_pass `--namespace` to generate Temporal Cloud links._")
         L.append("")
-        return out
+        return
     if not link_groups:
         L.append("_no runs to link._")
         L.append("")
-        return out
+        return
     for label, wfid, runs in link_groups:
-        wf_url = cloud_url(namespace, wfid, ui_base=ui_base)
-        L.append(f"**{label}** — [`{wfid}`]({wf_url})")
-        run_json = []
+        L.append(f"**{label}** — [`{wfid}`]({cloud_url(namespace, wfid, ui_base=ui_base)})")
         for r in runs:
             url = cloud_url(namespace, wfid, r.run_id, ui_base=ui_base)
             L.append(f"- {hhmmss(r.start_time)}–{hhmmss(r.end_time)}  {url}")
-            run_json.append({"run_id": r.run_id, "start": iso(r.start_time),
-                             "end": iso(r.end_time), "url": url})
         L.append("")
-        out[label] = {"workflow_id": wfid, "workflow_url": wf_url, "runs": run_json}
-    return out
+
+
+def _event_link(namespace, e, ui_base):
+    """Short, clickable 'run8#eventId' pointing at the triggering event (Markdown
+    link; the terminal renderer turns it into an OSC-8 hyperlink)."""
+    run8 = (e.run_id or "")[:8]
+    if not run8:
+        return ""
+    label = f"{run8}#{e.event_id}" if e.event_id else run8
+    if e.event_id:
+        url = cloud_event_url(namespace, e.workflow_id, e.run_id, e.event_id, ui_base)
+    else:
+        url = cloud_url(namespace, e.workflow_id, e.run_id, ui_base) if namespace else None
+    return f"[{label}]({url})" if url else label
 
 
 def _merged_timeline(dep, versions, wcis):
@@ -298,8 +331,10 @@ def _json_summary(deployment, dep, versions, wcis, win_start, win_end, blocked):
                 "worker_set": {
                     "last_size": w.last_worker_set_size,
                     "changes": [
-                        {"at": iso(t), "size": size, "status": status, "trigger": trigger}
-                        for t, size, status, trigger in (w.worker_set_series or [])
+                        {"at": iso(ch.time), "size": ch.size, "status": ch.status,
+                         "trigger": ch.trigger, "run_id": ch.run_id,
+                         "trigger_event_id": ch.trigger_event_id}
+                        for ch in (w.worker_set_series or [])
                     ],
                 },
             }

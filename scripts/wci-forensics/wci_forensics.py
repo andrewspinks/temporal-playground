@@ -68,6 +68,8 @@ def build_args() -> argparse.ArgumentParser:
     p.add_argument("--address", default=os.environ.get("TEMPORAL_ADDRESS"), help="frontend host:port")
     p.add_argument("--api-key", default=os.environ.get("TEMPORAL_API_KEY"))
     p.add_argument("--tls", action="store_true", help="force TLS (implied by --api-key)")
+    p.add_argument("--no-tls", action="store_true",
+                   help="force plaintext, e.g. a local gRPC proxy (overrides --api-key auto-TLS)")
     p.add_argument("--tls-cert", help="mTLS client cert (PEM)")
     p.add_argument("--tls-key", help="mTLS client key (PEM)")
     p.add_argument("--tls-ca", help="server CA cert (PEM)")
@@ -94,7 +96,7 @@ async def _connect(a):
     from forensics.connect import ConnOptions, connect
 
     return await connect(ConnOptions(
-        address=a.address, namespace=a.namespace, api_key=a.api_key, tls=a.tls,
+        address=a.address, namespace=a.namespace, api_key=a.api_key, tls=a.tls, no_tls=a.no_tls,
         tls_cert=a.tls_cert, tls_key=a.tls_key, tls_ca=a.tls_ca, tls_server_name=a.tls_server_name,
         proxy=a.proxy, proxy_user=a.proxy_user, proxy_pass=a.proxy_pass,
     ))
@@ -181,7 +183,7 @@ async def run(a) -> int:
     markdown, summary = build_report(
         dep, dep_analysis, versions, wcis, win_start, win_end,
         namespace=a.namespace, link_groups=link_groups, ui_base=a.ui_base,
-        poller_statuses=poller_statuses,
+        poller_statuses=poller_statuses, debug=a.debug,
     )
 
     with open(os.path.join(a.cache_dir, "report.md"), "w") as fh:

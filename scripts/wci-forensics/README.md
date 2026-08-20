@@ -48,6 +48,11 @@ python wci_forensics.py --deployment <dep> --namespace <ns> --address <host:7233
   --start now-4h
 ```
 
+```bash
+python wci_forensics.py --deployment <dep> --namespace <ns> \
+  --address 127.0.0.1:8080 --no-tls
+```
+
 Offline (folder of `*_events.json` dumps, no connection):
 ```bash
 python wci_forensics.py --deployment <deployment> \
@@ -59,10 +64,13 @@ Connection flags also read env vars: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`,
 `--cache-dir` (default `./wci-forensics-out/<deployment>/`), so re-runs are fast and the
 raw histories can later be fed back with `--offline`.
 
-The report includes a **Temporal Cloud links** section — a clickable UI URL for every run
-it analyzed (deployment, version, and WCI workflows). Links need a namespace, so pass
-`--namespace` even in `--offline` mode to get them; override the UI host with `--ui-base`
-(default `https://cloud.temporal.io`).
+Each **consolidated timeline** row's `run#event` column is a short clickable link
+(`<run8>#<eventId>`) pointing at the exact history event that triggered it
+(`…/history/events/<eventId>`) — a Markdown link, or an OSC-8 terminal hyperlink in
+`--format terminal`. The exhaustive per-run **Temporal Cloud links** section (a UI URL for
+every run of every workflow) is verbose and now only rendered under `--debug`; it remains in
+`summary.json` either way. Links need a namespace, so pass `--namespace` even in `--offline`
+mode to get them; override the UI host with `--ui-base` (default `https://cloud.temporal.io`).
 
 Other flags:
 - `--format {auto,terminal,markdown}` — stdout format. `auto` (default) prints colorized,
@@ -74,7 +82,8 @@ Other flags:
   checked automatically. Mismatches are flagged in a top-of-report ⚠️ Warnings section.
 - `--list-deployments` — list the deployment names visible in the namespace, then exit
   (handy when a run reports "no deployment-workflow history found").
-- `--debug` — print the visibility/fetch results per workflow to stderr.
+- `--debug` — print the visibility/fetch results per workflow to stderr, and include the
+  exhaustive per-run **Temporal Cloud links** section in the report.
 
 ## How it works
 

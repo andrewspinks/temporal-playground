@@ -14,6 +14,7 @@ class ConnOptions:
     namespace: str
     api_key: Optional[str] = None
     tls: bool = False
+    no_tls: bool = False  # force plaintext (e.g. a local proxy), overriding api-key auto-TLS
     tls_cert: Optional[str] = None
     tls_key: Optional[str] = None
     tls_ca: Optional[str] = None
@@ -39,7 +40,11 @@ async def connect(o: ConnOptions) -> Client:
         )
 
     # api_key implies TLS on Temporal Cloud; enable it unless mTLS is already set.
-    tls_arg = tls_config if tls_config is not None else (True if (o.tls or o.api_key) else False)
+    # --no-tls forces plaintext (e.g. a local gRPC proxy that terminates TLS itself).
+    if o.no_tls:
+        tls_arg = False
+    else:
+        tls_arg = tls_config if tls_config is not None else (True if (o.tls or o.api_key) else False)
 
     proxy = None
     if o.proxy:

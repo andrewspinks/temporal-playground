@@ -13,6 +13,18 @@ class TimelineEvent:
     workflow_id: str
     run_id: str
     summary: str
+    # The history event this row links to (the triggering event, where known).
+    event_id: Optional[int] = None
+
+
+@dataclasses.dataclass
+class WorkerSetChange:
+    time: Optional[datetime]
+    size: Optional[int]
+    status: str
+    trigger: str
+    run_id: str
+    trigger_event_id: Optional[int] = None
 
 
 @dataclasses.dataclass
@@ -79,6 +91,11 @@ class InvokeStats:
     after_draining_start: int
     after_drained: int
     by_trigger: Dict = None  # trigger label -> invoke count
+    # Trigger event of the first / last invoke (for timeline deep-links).
+    first_run: Optional[str] = None
+    first_event_id: Optional[int] = None
+    last_run: Optional[str] = None
+    last_event_id: Optional[int] = None
 
 
 @dataclasses.dataclass

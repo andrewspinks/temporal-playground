@@ -15,7 +15,7 @@ from .decode import decode_first, decode_payload
 from .model import (CurrentTransition, DeleteBlock, DeploymentAnalysis,
                     TimelineEvent, VersionInPlay)
 from .util import (build_from_version, event_kind, event_time, short,
-                   started_input_payloads, ts)
+                   short_error, started_input_payloads, ts)
 
 _VERSION_RE = re.compile(r"([0-9a-f]{40})")
 
@@ -88,34 +88,35 @@ def analyze_deployment(runs, win_start=None, win_end=None) -> DeploymentAnalysis
 
 
 def _collect_events(r, wfid, events, delete_blocks):
-    pending_accepted: List[tuple] = []  # (time, name)
+    pending_accepted: List[tuple] = []  # (time, name, event_id)
     for ev in r.history.events:
         which, att = event_kind(ev)
         t = event_time(ev)
         if which == "workflow_execution_update_accepted_event_attributes":
             name = att.accepted_request.input.name
-            pending_accepted.append((t, name))
+            pending_accepted.append((t, name, ev.event_id))
         elif which == "workflow_execution_update_completed_event_attributes":
             outcome = att.outcome
             failed = outcome.HasField("failure")
-            msg = outcome.failure.message if failed else ""
-            acc_time, name = pending_accepted.pop(0) if pending_accepted else (t, "?")
+            raw_msg = outcome.failure.message if failed else ""
+            acc_time, name, acc_eid = pending_accepted.pop(0) if pending_accepted else (t, "?", ev.event_id)
             if name in _INTERESTING_UPDATES or failed:
-                status = "FAILED: " + msg if failed else "ok"
+                status = "FAILED: " + short_error(raw_msg) if failed else "ok"
                 events.append(TimelineEvent(acc_time, "deployment", wfid, r.run_id,
-                                            f"update {name} -> {status}"))
+                                            f"update {name} -> {status}", event_id=acc_eid))
             if name == "delete-version" and failed:
-                m = _VERSION_RE.search(msg)
-                delete_blocks.append(DeleteBlock(acc_time, m.group(1) if m else None, msg))
+                m = _VERSION_RE.search(raw_msg)  # build id from the full message
+                delete_blocks.append(DeleteBlock(acc_time, m.group(1) if m else None, short_error(raw_msg)))
         elif which == "signal_external_workflow_execution_initiated_event_attributes":
             tgt = att.workflow_execution.workflow_id
             m = _VERSION_RE.search(tgt)
             events.append(TimelineEvent(t, "deployment", wfid, r.run_id,
-                                        f"signal {att.signal_name} -> {short(m.group(1)) if m else tgt}"))
+                                        f"signal {att.signal_name} -> {short(m.group(1)) if m else tgt}",
+                                        event_id=ev.event_id))
         elif which == "workflow_execution_signaled_event_attributes":
             if att.signal_name in _INTERESTING_SIGNALS:
                 events.append(TimelineEvent(t, "deployment", wfid, r.run_id,
-                                            f"recv-signal {att.signal_name}"))
+                                            f"recv-signal {att.signal_name}", event_id=ev.event_id))
 
 
 def _derive_transitions(samples) -> List[CurrentTransition]:

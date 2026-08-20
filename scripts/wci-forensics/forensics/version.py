@@ -35,6 +35,8 @@ def analyze_version(build_id, runs) -> VersionAnalysis:
     drained_at: Optional[datetime] = None
     demote_received: Optional[datetime] = None
     deleted_at: Optional[datetime] = None
+    demote_ref = (None, None)   # (run_id, event_id) of the demote signal
+    deleted_ref = (None, None)  # (run_id, event_id) of the completed event
     validation_ok: Optional[bool] = None
     validation_error: Optional[str] = None
     validation_last_check: Optional[datetime] = None
@@ -71,17 +73,22 @@ def analyze_version(build_id, runs) -> VersionAnalysis:
             which, att = event_kind(ev)
             if which == "workflow_execution_signaled_event_attributes" and att.signal_name == "demote-version":
                 t = event_time(ev)
-                demote_received = demote_received or t
-                events.append(TimelineEvent(t, src, wfid, r.run_id, "recv-signal demote-version (draining begins)"))
+                if demote_received is None:
+                    demote_received, demote_ref = t, (r.run_id, ev.event_id)
+                events.append(TimelineEvent(t, src, wfid, r.run_id,
+                                            "recv-signal demote-version (draining begins)", event_id=ev.event_id))
             elif which == "workflow_execution_completed_event_attributes":
-                deleted_at = event_time(ev)
+                deleted_at, deleted_ref = event_time(ev), (r.run_id, ev.event_id)
 
+    # DRAINING is triggered by the demote signal; link to that event.
     if draining_start:
-        events.append(TimelineEvent(draining_start, src, wfid, "", "drainage status -> DRAINING"))
-    if drained_at:
+        events.append(TimelineEvent(draining_start, src, wfid, demote_ref[0], "drainage status -> DRAINING",
+                                    event_id=demote_ref[1]))
+    if drained_at:  # state-derived (no single event) — no deep link
         events.append(TimelineEvent(drained_at, src, wfid, "", "drainage status -> DRAINED"))
     if deleted_at:
-        events.append(TimelineEvent(deleted_at, src, wfid, "", "version workflow COMPLETED (deleted)"))
+        events.append(TimelineEvent(deleted_at, src, wfid, deleted_ref[0],
+                                    "version workflow COMPLETED (deleted)", event_id=deleted_ref[1]))
     if validation_ok is False:
         events.append(TimelineEvent(validation_last_check, src, wfid, "",
                                     f"compute validation FAILING: {validation_error}"))

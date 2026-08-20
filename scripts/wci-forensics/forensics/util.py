@@ -1,11 +1,24 @@
 """Shared helpers: timestamps, formatting, enum names, event access."""
 from __future__ import annotations
 
+import re
 from datetime import datetime, timezone
 from typing import Optional
 from urllib.parse import quote
 
 DRAINAGE_STATUS = {0: "UNSPECIFIED", 1: "DRAINING", 2: "DRAINED"}
+
+
+def short_error(msg: Optional[str], limit: int = 160) -> str:
+    """Condense a failure message to a single readable line. Full detail (stack
+    traces, embedded JSON) is reachable via the event's Cloud link, so keep only
+    the first line up to any embedded blob, collapsed and length-capped."""
+    if not msg:
+        return msg or ""
+    first = msg.strip().splitlines()[0]
+    first = first.split(" {", 1)[0].rstrip(" :{").strip()  # drop trailing JSON/struct blob
+    first = re.sub(r"\s+", " ", first)
+    return first if len(first) <= limit else first[: limit - 1] + "…"
 
 DEFAULT_UI_BASE = "https://cloud.temporal.io"
 
@@ -19,6 +32,16 @@ def cloud_url(namespace, workflow_id, run_id=None, ui_base=DEFAULT_UI_BASE) -> O
         f"/workflows/{quote(workflow_id, safe='')}"
     )
     return f"{base}/{quote(run_id, safe='')}/history" if run_id else base
+
+
+def cloud_event_url(namespace, workflow_id, run_id, event_id, ui_base=DEFAULT_UI_BASE) -> Optional[str]:
+    """Temporal Cloud UI link to a specific history event within a run.
+
+    Route: /namespaces/<ns>/workflows/<wf>/<run>/history/events/<eventId>
+    """
+    if not (namespace and run_id and event_id):
+        return None
+    return f"{cloud_url(namespace, workflow_id, run_id, ui_base)}/events/{event_id}"
 
 
 def ts(proto_ts) -> Optional[datetime]:
