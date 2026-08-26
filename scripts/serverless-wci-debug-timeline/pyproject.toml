@@ -1,0 +1,25 @@
+[project]
+name = "serverless-wci-debug-timeline"
+version = "0.1.0"
+description = "Forensics for Temporal worker-deployment / WCI (auto-scaled workers) incidents."
+requires-python = ">=3.11"
+dependencies = [
+    "temporalio>=1.7,<2",
+]
+
+[tool.uv]
+# Script tool, not an installable package: uv only manages the dependency venv.
+package = false
+# Prefer the mise-provided interpreter rather than uv downloading its own.
+python-preference = "system"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "W"]
+ignore = ["E501"]  # line length is owned by the formatter
+
+[tool.ruff.lint.isort]
+known-first-party = ["forensics"]

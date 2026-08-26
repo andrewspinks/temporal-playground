@@ -4,6 +4,7 @@ Both sources expose ``runs_for(workflow_id, start, end)`` returning the
 continue-as-new runs of that workflow ID whose event span overlaps the window,
 ordered oldest-first.
 """
+
 from __future__ import annotations
 
 import dataclasses
@@ -11,8 +12,7 @@ import glob
 import os
 import re
 import sys
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from google.protobuf import json_format
 from temporalio.api.history.v1 import History
@@ -24,13 +24,13 @@ from temporalio.service import RPCError, RPCStatusCode
 class RunHistory:
     workflow_id: str
     run_id: str
-    start_time: Optional[datetime]
-    end_time: Optional[datetime]
+    start_time: datetime | None
+    end_time: datetime | None
     history: History
 
 
 def event_time(event) -> datetime:
-    return event.event_time.ToDatetime(tzinfo=timezone.utc)
+    return event.event_time.ToDatetime(tzinfo=UTC)
 
 
 def _span(history: History):
@@ -71,7 +71,7 @@ def _parse_history(text: str) -> History:
 
 
 class HistorySource:
-    async def runs_for(self, workflow_id, win_start, win_end) -> List[RunHistory]:
+    async def runs_for(self, workflow_id, win_start, win_end) -> list[RunHistory]:
         raise NotImplementedError
 
 
@@ -87,7 +87,7 @@ class LiveSource(HistorySource):
         if self.debug:
             print(f"[debug] {msg}", file=sys.stderr)
 
-    async def runs_for(self, workflow_id, win_start, win_end) -> List[RunHistory]:
+    async def runs_for(self, workflow_id, win_start, win_end) -> list[RunHistory]:
         # These system workflows run inside a namespace division, which visibility
         # hides from ordinary queries; include the division predicate so
         # list_workflows can enumerate the CAN runs. If that still comes back empty
@@ -108,8 +108,8 @@ class LiveSource(HistorySource):
             self._log(f"falling back to CAN-walk for {workflow_id!r}")
             return await self._can_walk(workflow_id, win_start, win_end)
 
-        out: List[RunHistory] = []
-        for we in sorted(metas, key=lambda w: (w.start_time or datetime.min.replace(tzinfo=timezone.utc))):
+        out: list[RunHistory] = []
+        for we in sorted(metas, key=lambda w: (w.start_time or datetime.min.replace(tzinfo=UTC))):
             if not _overlaps(we.start_time, we.close_time, win_start, win_end):
                 continue
             hist = await self._history(workflow_id, we.run_id)
@@ -117,10 +117,9 @@ class LiveSource(HistorySource):
             out.append(RunHistory(workflow_id, we.run_id, hs or we.start_time, he or we.close_time, hist))
         return out
 
-    async def _can_walk(self, workflow_id, win_start, win_end) -> List[RunHistory]:
-        runs: List[RunHistory] = []
+    async def _can_walk(self, workflow_id, win_start, win_end) -> list[RunHistory]:
+        runs: list[RunHistory] = []
         run_id = ""  # latest
-        first = True
         for _ in range(10000):  # safety bound
             try:
                 hist = await self._history(workflow_id, run_id)
@@ -131,10 +130,7 @@ class LiveSource(HistorySource):
                     break
                 # Connection / auth / permission / unavailable — surface loudly;
                 # do not masquerade as "no history".
-                raise RuntimeError(
-                    f"fetch history for {workflow_id!r} failed: {e.status.name}: {e.message}"
-                ) from e
-            first = False
+                raise RuntimeError(f"fetch history for {workflow_id!r} failed: {e.status.name}: {e.message}") from e
             hs, he = _span(hist)
             if _overlaps(hs, he, win_start, win_end):
                 started = hist.events[0].workflow_execution_started_event_attributes
@@ -143,12 +139,17 @@ class LiveSource(HistorySource):
             started = hist.events[0].workflow_execution_started_event_attributes
             prev = started.continued_execution_run_id
             # Stop once we've walked entirely before the window.
-            if hs is not None and win_start is not None and hs < win_start and not _overlaps(hs, he, win_start, win_end):
+            if (
+                hs is not None
+                and win_start is not None
+                and hs < win_start
+                and not _overlaps(hs, he, win_start, win_end)
+            ):
                 break
             if not prev:
                 break
             run_id = prev
-        runs.sort(key=lambda r: (r.start_time or datetime.min.replace(tzinfo=timezone.utc)))
+        runs.sort(key=lambda r: (r.start_time or datetime.min.replace(tzinfo=UTC)))
         return runs
 
     async def _history(self, workflow_id, run_id) -> History:
@@ -182,8 +183,8 @@ class LiveSource(HistorySource):
 class OfflineSource(HistorySource):
     """Indexes a folder (recursively) of ``*_events.json`` protojson dumps."""
 
-    def __init__(self, dirs: List[str]):
-        self.index: Dict[str, List[RunHistory]] = {}
+    def __init__(self, dirs: list[str]):
+        self.index: dict[str, list[RunHistory]] = {}
         for d in dirs:
             for path in glob.glob(os.path.join(d, "**", "*_events.json"), recursive=True):
                 with open(path) as fh:
@@ -196,28 +197,27 @@ class OfflineSource(HistorySource):
                 hs, he = _span(hist)
                 self.index.setdefault(wfid, []).append(RunHistory(wfid, run_id, hs, he, hist))
         for runs in self.index.values():
-            runs.sort(key=lambda r: (r.start_time or datetime.min.replace(tzinfo=timezone.utc)))
+            runs.sort(key=lambda r: (r.start_time or datetime.min.replace(tzinfo=UTC)))
 
-    async def runs_for(self, workflow_id, win_start, win_end) -> List[RunHistory]:
-        return [
-            r for r in self.index.get(workflow_id, [])
-            if _overlaps(r.start_time, r.end_time, win_start, win_end)
-        ]
+    async def runs_for(self, workflow_id, win_start, win_end) -> list[RunHistory]:
+        return [r for r in self.index.get(workflow_id, []) if _overlaps(r.start_time, r.end_time, win_start, win_end)]
 
 
-async def list_deployments(client: Client) -> List[str]:
+async def list_deployments(client: Client) -> list[str]:
     """Return the deployment names visible in the namespace (via the
     deployment-workflow type), newest activity first."""
     from .ids import DELIM, DEPLOYMENT_PREFIX
 
     prefix = DEPLOYMENT_PREFIX + DELIM
     names = {}
-    query = ('WorkflowType = "temporal-sys-worker-deployment-workflow" '
-             f'AND TemporalNamespaceDivision = "{DIVISION_DEPLOYMENT}"')
+    query = (
+        'WorkflowType = "temporal-sys-worker-deployment-workflow" '
+        f'AND TemporalNamespaceDivision = "{DIVISION_DEPLOYMENT}"'
+    )
     async for we in client.list_workflows(query=query):
         if we.id.startswith(prefix):
-            name = we.id[len(prefix):]
-            t = we.start_time or datetime.min.replace(tzinfo=timezone.utc)
+            name = we.id[len(prefix) :]
+            t = we.start_time or datetime.min.replace(tzinfo=UTC)
             if name not in names or t > names[name]:
                 names[name] = t
     return [n for n, _ in sorted(names.items(), key=lambda kv: kv[1], reverse=True)]

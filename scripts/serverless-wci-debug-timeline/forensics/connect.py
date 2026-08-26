@@ -1,8 +1,8 @@
 """Temporal client connection (API key or mTLS, optional HTTP-connect proxy)."""
+
 from __future__ import annotations
 
 import dataclasses
-from typing import Optional
 
 from temporalio.client import Client
 from temporalio.service import HttpConnectProxyConfig, TLSConfig
@@ -12,16 +12,16 @@ from temporalio.service import HttpConnectProxyConfig, TLSConfig
 class ConnOptions:
     address: str
     namespace: str
-    api_key: Optional[str] = None
+    api_key: str | None = None
     tls: bool = False
     no_tls: bool = False  # force plaintext (e.g. a local proxy), overriding api-key auto-TLS
-    tls_cert: Optional[str] = None
-    tls_key: Optional[str] = None
-    tls_ca: Optional[str] = None
-    tls_server_name: Optional[str] = None
-    proxy: Optional[str] = None
-    proxy_user: Optional[str] = None
-    proxy_pass: Optional[str] = None
+    tls_cert: str | None = None
+    tls_key: str | None = None
+    tls_ca: str | None = None
+    tls_server_name: str | None = None
+    proxy: str | None = None
+    proxy_user: str | None = None
+    proxy_pass: str | None = None
 
 
 def _read(path: str) -> bytes:

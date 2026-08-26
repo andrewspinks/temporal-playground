@@ -25,11 +25,11 @@ if ! command -v go >/dev/null 2>&1; then
   exit 1
 fi
 
-TMP="$REPO/cmd/_wci_forensics_gendesc"
+TMP="$REPO/cmd/_serverless_wci_gendesc"
 mkdir -p "$TMP"
 cp "$HERE/gen_descriptors.go" "$TMP/main.go"
 trap 'rm -rf "$TMP"' EXIT
 
-( cd "$REPO" && go run ./cmd/_wci_forensics_gendesc ) > "$HERE/deployment_descriptors.binpb"
+( cd "$REPO" && go run ./cmd/_serverless_wci_gendesc ) > "$HERE/deployment_descriptors.binpb"
 
 echo "wrote $HERE/deployment_descriptors.binpb ($(wc -c < "$HERE/deployment_descriptors.binpb") bytes)" >&2

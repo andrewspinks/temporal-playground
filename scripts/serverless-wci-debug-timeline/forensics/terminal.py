@@ -4,6 +4,7 @@ Transforms the single Markdown source (headers, tables, bullets, code fences,
 links, `code`/**bold**) into aligned, optionally ANSI-colored terminal output —
 so stdout is readable while report.md stays shareable Markdown.
 """
+
 from __future__ import annotations
 
 import re
@@ -18,12 +19,23 @@ class _C:
     def _w(self, code, s):
         return f"\033[{code}m{s}\033[0m" if self.on else s
 
-    def bold(self, s):   return self._w("1", s)
-    def dim(self, s):    return self._w("2", s)
-    def red(self, s):    return self._w("31", s)
-    def green(self, s):  return self._w("32", s)
-    def yellow(self, s): return self._w("33", s)
-    def cyan(self, s):   return self._w("36", s)
+    def bold(self, s):
+        return self._w("1", s)
+
+    def dim(self, s):
+        return self._w("2", s)
+
+    def red(self, s):
+        return self._w("31", s)
+
+    def green(self, s):
+        return self._w("32", s)
+
+    def yellow(self, s):
+        return self._w("33", s)
+
+    def cyan(self, s):
+        return self._w("36", s)
 
     def link(self, text, url):
         # OSC-8 hyperlink, styled underline+blue so it clearly reads as clickable.
@@ -133,8 +145,13 @@ def to_terminal(md: str, color: bool = True, width: int = None, links: bool = No
                 out += _render_table(block, c, width)
             continue
         stripped = line.strip()
-        if (len(stripped) > 2 and stripped[0] == "_" and stripped[-1] == "_"
-                and stripped[1] != "_" and stripped[-2] != "_"):
+        if (
+            len(stripped) > 2
+            and stripped[0] == "_"
+            and stripped[-1] == "_"
+            and stripped[1] != "_"
+            and stripped[-2] != "_"
+        ):
             out.append(c.dim(_inline(stripped[1:-1], c)))
         elif line.startswith("### "):
             out.append(c.bold(line[4:]))

@@ -8,6 +8,7 @@ Handles every payload encoding these histories use:
   - binary/plain    -> bytes
   - binary/null     -> None
 """
+
 from __future__ import annotations
 
 import functools
@@ -16,9 +17,7 @@ import os
 
 from google.protobuf import descriptor_pb2, descriptor_pool, message_factory
 
-_DESC_PATH = os.path.join(
-    os.path.dirname(__file__), "..", "descriptors", "deployment_descriptors.binpb"
-)
+_DESC_PATH = os.path.join(os.path.dirname(__file__), "..", "descriptors", "deployment_descriptors.binpb")
 
 
 @functools.lru_cache(maxsize=1)
@@ -32,7 +31,7 @@ def _pool() -> descriptor_pool.DescriptorPool:
     return pool
 
 
-@functools.lru_cache(maxsize=None)
+@functools.cache
 def message_class(full_name: str):
     return message_factory.GetMessageClass(_pool().FindMessageTypeByName(full_name))
 

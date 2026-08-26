@@ -7,16 +7,15 @@ Measures, for one serverless version's controller across its CAN chain:
   - PullStats cadence and the scaling-metric (rate/worker-count) time series.
   - How the controller chain terminated.
 """
+
 from __future__ import annotations
 
 import collections
-from datetime import datetime, timezone
-from typing import Optional
+from datetime import UTC, datetime
 
 from .decode import decode_first
 from .model import InvokeStats, TimelineEvent, WciAnalysis, WorkerSetChange
 from .util import event_kind, event_time, hhmmss, short, short_error
-
 
 # Scaling triggers (what caused a scale action).
 TRIGGER_PUSH = "task-add push (no-sync-match)"
@@ -33,22 +32,22 @@ def _trigger(wtceid, wft_batch, wft_has_la, wft_la_eid):
     genuinely mixed tasks rather than guessing. The event id is the representative
     triggering event to deep-link to."""
     batch = list(wft_batch.get(wtceid) or [])  # list of (label, event_id)
-    labels = [l for l, _ in batch]
+    labels = [lbl for lbl, _ in batch]
     if wft_has_la.get(wtceid):
         labels.insert(0, TRIGGER_PUSH)
     labels = list(dict.fromkeys(labels))
     label = TRIGGER_UNKNOWN if not labels else (labels[0] if len(labels) == 1 else " + ".join(labels))
     # Prefer a push signal event, else the first trigger event, else the local-
     # activity marker, else the deciding workflow-task-completed event itself.
-    eid = next((e for l, e in batch if l == TRIGGER_PUSH), None)
+    eid = next((e for lbl, e in batch if lbl == TRIGGER_PUSH), None)
     if eid is None:
         eid = batch[0][1] if batch else wft_la_eid.get(wtceid) or wtceid
     return label, eid
 
 
-def _ms_to_dt(ms) -> Optional[datetime]:
+def _ms_to_dt(ms) -> datetime | None:
     try:
-        return datetime.fromtimestamp(float(ms) / 1000.0, tz=timezone.utc)
+        return datetime.fromtimestamp(float(ms) / 1000.0, tz=UTC)
     except Exception:
         return None
 
@@ -67,9 +66,9 @@ def analyze_wci(build_id, runs, draining_start=None, drained_at=None) -> WciAnal
     pullstats = 0
     other: collections.Counter = collections.Counter()
     backlog_series = []
-    last_scale_up: Optional[datetime] = None
+    last_scale_up: datetime | None = None
     worker_set_series = []  # list[WorkerSetChange] — Cloud Run / ECS sizing
-    ws_meta = {}       # scheduled_event_id -> (size, trigger_label, trigger_eid, run_id)
+    ws_meta = {}  # scheduled_event_id -> (size, trigger_label, trigger_eid, run_id)
     validate_failures = []  # (time, message) — ValidateSpec activity failures
     invoke_by_trigger: collections.Counter = collections.Counter()
 
@@ -82,11 +81,11 @@ def analyze_wci(build_id, runs, draining_start=None, drained_at=None) -> WciAnal
         # (b) the events that woke it (its "trigger batch": the activity completions /
         # signals appended since the previous WFT). We keep the triggering event ids so
         # the timeline can deep-link to them.
-        wft_batch: dict = {}     # wft_completed_event_id -> list[(label, event_id)]
-        wft_has_la: dict = {}    # wft_completed_event_id -> bool (LocalActivity ran)
-        wft_la_eid: dict = {}    # wft_completed_event_id -> local-activity marker event id
+        wft_batch: dict = {}  # wft_completed_event_id -> list[(label, event_id)]
+        wft_has_la: dict = {}  # wft_completed_event_id -> bool (LocalActivity ran)
+        wft_la_eid: dict = {}  # wft_completed_event_id -> local-activity marker event id
         current_wft = None
-        pending = []             # [(label, event_id)] accumulating for the next WFT
+        pending = []  # [(label, event_id)] accumulating for the next WFT
 
         for ev in r.history.events:
             which, att = event_kind(ev)
@@ -152,7 +151,9 @@ def analyze_wci(build_id, runs, draining_start=None, drained_at=None) -> WciAnal
                     failed += 1
                 elif nm == "UpdateWorkerSetSize":
                     size, label, teid, run_id = ws_meta.get(sid, (None, TRIGGER_UNKNOWN, None, r.run_id))
-                    worker_set_series.append(WorkerSetChange(t, size, f"FAILED: {short_error(att.failure.message)}", label, run_id, teid))
+                    worker_set_series.append(
+                        WorkerSetChange(t, size, f"FAILED: {short_error(att.failure.message)}", label, run_id, teid)
+                    )
                 elif nm == "ValidateSpec":
                     validate_failures.append((t, att.failure.message, r.run_id, sid))
             elif which == "workflow_execution_signaled_event_attributes":
@@ -172,7 +173,10 @@ def analyze_wci(build_id, runs, draining_start=None, drained_at=None) -> WciAnal
         return sum(1 for t in invoke_times if cutoff and t > cutoff)
 
     inv = InvokeStats(
-        total=len(invoke_times), started=started, completed=completed, failed=failed,
+        total=len(invoke_times),
+        started=started,
+        completed=completed,
+        failed=failed,
         first=invoke_times[0] if invoke_times else None,
         last=invoke_times[-1] if invoke_times else None,
         per_minute=_per_minute(invoke_times),
@@ -191,16 +195,23 @@ def analyze_wci(build_id, runs, draining_start=None, drained_at=None) -> WciAnal
     for t, msg, run_id, sid in validate_failures:
         events.append(TimelineEvent(t, src, wfid, run_id, f"ValidateSpec FAILED: {short_error(msg)}", event_id=sid))
     return WciAnalysis(
-        build_id=build_id, workflow_id=wfid, runs=len(runs), invoke=inv,
-        pullstats_count=pullstats, other_activities=dict(other),
-        last_scale_up=last_scale_up, terminal=terminal,
-        backlog_series=backlog_series, events=events,
-        worker_set_series=worker_set_series, last_worker_set_size=last_ws,
+        build_id=build_id,
+        workflow_id=wfid,
+        runs=len(runs),
+        invoke=inv,
+        pullstats_count=pullstats,
+        other_activities=dict(other),
+        last_scale_up=last_scale_up,
+        terminal=terminal,
+        backlog_series=backlog_series,
+        events=events,
+        worker_set_series=worker_set_series,
+        last_worker_set_size=last_ws,
         validate_failures=validate_failures,
     )
 
 
-def _terminal(runs) -> Optional[str]:
+def _terminal(runs) -> str | None:
     if not runs:
         return None
     final = runs[-1]
@@ -221,19 +232,44 @@ def _terminal(runs) -> Optional[str]:
 def _events(src, wfid, runs, inv: InvokeStats, terminal, worker_set_series) -> list:
     ev = []
     if inv.first:
-        ev.append(TimelineEvent(inv.first, src, wfid, inv.first_run or "",
-                                f"first InvokeWorker (of {inv.total})", event_id=inv.first_event_id))
+        ev.append(
+            TimelineEvent(
+                inv.first,
+                src,
+                wfid,
+                inv.first_run or "",
+                f"first InvokeWorker (of {inv.total})",
+                event_id=inv.first_event_id,
+            )
+        )
     if inv.last:
-        ev.append(TimelineEvent(inv.last, src, wfid, inv.last_run or "",
-                                f"last InvokeWorker (total {inv.total}, {inv.failed} failed)",
-                                event_id=inv.last_event_id))
+        ev.append(
+            TimelineEvent(
+                inv.last,
+                src,
+                wfid,
+                inv.last_run or "",
+                f"last InvokeWorker (total {inv.total}, {inv.failed} failed)",
+                event_id=inv.last_event_id,
+            )
+        )
     for ch in worker_set_series:
-        ev.append(TimelineEvent(ch.time, src, wfid, ch.run_id,
-                                f"UpdateWorkerSetSize -> {ch.size} ({ch.status}) [trigger: {ch.trigger}]",
-                                event_id=ch.trigger_event_id))
+        ev.append(
+            TimelineEvent(
+                ch.time,
+                src,
+                wfid,
+                ch.run_id,
+                f"UpdateWorkerSetSize -> {ch.size} ({ch.status}) [trigger: {ch.trigger}]",
+                event_id=ch.trigger_event_id,
+            )
+        )
     if runs:
         final = runs[-1]
         last = final.history.events[-1]
-        ev.append(TimelineEvent(event_time(last), src, wfid, final.run_id,
-                                f"WCI chain ended: {terminal}", event_id=last.event_id))
+        ev.append(
+            TimelineEvent(
+                event_time(last), src, wfid, final.run_id, f"WCI chain ended: {terminal}", event_id=last.event_id
+            )
+        )
     return ev

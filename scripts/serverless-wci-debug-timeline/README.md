@@ -1,4 +1,4 @@
-# wci-forensics
+# serverless-wci-debug-timeline
 
 Given a **worker deployment** and a **time window**, reconstruct what happened:
 
@@ -14,9 +14,25 @@ Outputs a consolidated timeline (with workflow + run IDs), a drain summary, per-
 
 ## Setup
 
+Toolchain is managed by [mise](https://mise.jdx.dev) (python, uv, ruff, protoc, go) and
+Python deps by [uv](https://docs.astral.sh/uv/):
+
 ```bash
-python3 -m venv .venv && . .venv/bin/activate
-pip install -r requirements.txt
+mise install          # installs python/uv/ruff/protoc/go per mise.toml
+mise run sync         # uv sync -> .venv with dependencies
+```
+
+Run the tool with `uv run` (or `mise run wci -- <args>`):
+
+```bash
+uv run python serverless_wci_debug_timeline.py --help
+```
+
+Lint / format:
+
+```bash
+mise run lint         # ruff check .
+mise run format       # ruff format .
 ```
 
 The binary-protobuf deployment/version state is decoded via a committed descriptor set
@@ -25,14 +41,18 @@ The binary-protobuf deployment/version state is decoded via a committed descript
 `temporal-auto-scaled-workers` repo change:
 
 ```bash
-descriptors/gen_descriptors.sh   # needs Go + that repo checked out
+WCI_REPO=/path/to/temporal-auto-scaled-workers mise run gen-descriptors
 ```
 
 ## Usage
 
+The examples below use `python serverless_wci_debug_timeline.py …` — run them inside the uv venv
+(`source .venv/bin/activate`) or prefix each with `uv run` (e.g. `uv run python
+serverless_wci_debug_timeline.py …`).
+
 Live (Temporal Cloud, API key):
 ```bash
-python wci_forensics.py \
+python serverless_wci_debug_timeline.py \
   --deployment <deployment> \
   --namespace  <namespace> \
   --address    <namespace>.tmprl.cloud:7233 \
@@ -42,26 +62,26 @@ python wci_forensics.py \
 
 Live via mTLS and/or an HTTP-connect proxy:
 ```bash
-python wci_forensics.py --deployment <dep> --namespace <ns> --address <host:7233> \
+python serverless_wci_debug_timeline.py --deployment <dep> --namespace <ns> --address <host:7233> \
   --tls-cert client.pem --tls-key client.key \
   --proxy proxy.internal:3128 --proxy-user u --proxy-pass p \
   --start now-4h
 ```
 
 ```bash
-python wci_forensics.py --deployment <dep> --namespace <ns> \
+python serverless_wci_debug_timeline.py --deployment <dep> --namespace <ns> \
   --address 127.0.0.1:8080 --no-tls
 ```
 
 Offline (folder of `*_events.json` dumps, no connection):
 ```bash
-python wci_forensics.py --deployment <deployment> \
+python serverless_wci_debug_timeline.py --deployment <deployment> \
   --offline ./dumps
 ```
 
 Connection flags also read env vars: `TEMPORAL_ADDRESS`, `TEMPORAL_NAMESPACE`,
 `TEMPORAL_API_KEY`, `HTTPS_PROXY`. Live runs cache each history under
-`--cache-dir` (default `./wci-forensics-out/<deployment>/`), so re-runs are fast and the
+`--cache-dir` (default `./serverless-wci-debug-timeline-out/<deployment>/`), so re-runs are fast and the
 raw histories can later be fed back with `--offline`.
 
 Each **consolidated timeline** row's `run#event` column is a short clickable link
@@ -106,5 +126,5 @@ when no fixture is present.
 
 ```bash
 cp tests/fixture.example.json tests/fixture.json   # then edit tests/fixture.json
-WCI_GOLDEN_FIXTURE=tests/fixture.json python tests/golden_test.py
+mise run test                                       # uv run python tests/golden_test.py
 ```

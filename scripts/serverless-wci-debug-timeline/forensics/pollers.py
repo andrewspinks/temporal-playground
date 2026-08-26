@@ -5,10 +5,10 @@ worker polling a task queue with a build id / versioning identity that does not
 match the task queue's *current* version. Worker Versioning routes tasks only to
 the current version, so a mismatched worker sits polling and receives nothing.
 """
+
 from __future__ import annotations
 
 import dataclasses
-from typing import List, Optional
 
 from temporalio.api.enums.v1 import TaskQueueType
 from temporalio.api.taskqueue.v1 import TaskQueue
@@ -20,6 +20,7 @@ UNVERSIONED = "__unversioned__"
 
 try:
     from temporalio.api.enums.v1 import WorkerVersioningMode
+
     _VERSIONED = WorkerVersioningMode.WORKER_VERSIONING_MODE_VERSIONED
 except Exception:  # pragma: no cover
     _VERSIONED = 2
@@ -31,16 +32,16 @@ class Poller:
     tq_type: str
     version: str  # normalized "<deployment>:<build>" or "__unversioned__"
     mode: str
-    last_access: Optional[object]
+    last_access: object | None
 
 
 @dataclasses.dataclass
 class TaskQueuePollerStatus:
     task_queue: str
     current_version: str
-    pollers: List[Poller]
-    mismatches: List[Poller]
-    error: Optional[str] = None
+    pollers: list[Poller]
+    mismatches: list[Poller]
+    error: str | None = None
 
 
 def _norm(dep, build) -> str:
@@ -76,11 +77,13 @@ def _poller_version(p):
 
 
 async def check_task_queue(client, namespace, tq) -> TaskQueuePollerStatus:
-    pollers: List[Poller] = []
+    pollers: list[Poller] = []
     current = UNVERSIONED
     error = None
-    for tqt, tname in ((TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW, "workflow"),
-                       (TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY, "activity")):
+    for tqt, tname in (
+        (TaskQueueType.TASK_QUEUE_TYPE_WORKFLOW, "workflow"),
+        (TaskQueueType.TASK_QUEUE_TYPE_ACTIVITY, "activity"),
+    ):
         try:
             resp = await client.workflow_service.describe_task_queue(
                 DescribeTaskQueueRequest(namespace=namespace, task_queue=TaskQueue(name=tq), task_queue_type=tqt)

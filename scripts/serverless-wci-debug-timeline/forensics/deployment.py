@@ -5,23 +5,23 @@ set of versions in play during the window, which of them are serverless
 (WCI-managed), and surfaces the orchestration events — including
 ``delete-version`` attempts blocked by active pollers.
 """
+
 from __future__ import annotations
 
 import re
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
-from .decode import decode_first, decode_payload
-from .model import (CurrentTransition, DeleteBlock, DeploymentAnalysis,
-                    TimelineEvent, VersionInPlay)
-from .util import (build_from_version, event_kind, event_time, short,
-                   short_error, started_input_payloads, ts)
+from .decode import decode_first
+from .model import CurrentTransition, DeleteBlock, DeploymentAnalysis, TimelineEvent, VersionInPlay
+from .util import build_from_version, event_kind, event_time, short, short_error, started_input_payloads, ts
 
 _VERSION_RE = re.compile(r"([0-9a-f]{40})")
 
 # Orchestration updates/signals worth putting on the timeline.
 _INTERESTING_UPDATES = {
-    "set-current-version", "set-ramping-version", "delete-version",
+    "set-current-version",
+    "set-ramping-version",
+    "delete-version",
 }
 _INTERESTING_SIGNALS = {"sync-version-summary"}
 
@@ -38,7 +38,7 @@ def _routing_build(rc):
     )
 
 
-def _provider_of(compute_config) -> Optional[str]:
+def _provider_of(compute_config) -> str | None:
     for grp in compute_config.scaling_groups.values():
         if grp.provider_type:
             return grp.provider_type
@@ -47,16 +47,16 @@ def _provider_of(compute_config) -> Optional[str]:
 
 def analyze_deployment(runs, win_start=None, win_end=None) -> DeploymentAnalysis:
     wfid = runs[0].workflow_id if runs else ""
-    events: List[TimelineEvent] = []
-    delete_blocks: List[DeleteBlock] = []
+    events: list[TimelineEvent] = []
+    delete_blocks: list[DeleteBlock] = []
     versions: dict[str, VersionInPlay] = {}
 
     # (current_changed_time, build) samples for deriving transitions.
-    current_samples: List[tuple] = []
+    current_samples: list[tuple] = []
 
     for r in runs:
         args = decode_first(started_input_payloads(r.history))
-        if args is None or isinstance(args, (dict, bytes)):
+        if args is None or isinstance(args, dict | bytes):
             continue
         state = args.state
         rc = state.routing_config
@@ -83,12 +83,12 @@ def analyze_deployment(runs, win_start=None, win_end=None) -> DeploymentAnalysis
 
     transitions = _derive_transitions(current_samples)
     in_play = _versions_in_window(transitions, versions, win_start, win_end)
-    events.sort(key=lambda e: (e.time or datetime.min.replace(tzinfo=timezone.utc)))
+    events.sort(key=lambda e: (e.time or datetime.min.replace(tzinfo=UTC)))
     return DeploymentAnalysis(wfid, transitions, in_play, delete_blocks, events)
 
 
 def _collect_events(r, wfid, events, delete_blocks):
-    pending_accepted: List[tuple] = []  # (time, name, event_id)
+    pending_accepted: list[tuple] = []  # (time, name, event_id)
     for ev in r.history.events:
         which, att = event_kind(ev)
         t = event_time(ev)
@@ -102,30 +102,43 @@ def _collect_events(r, wfid, events, delete_blocks):
             acc_time, name, acc_eid = pending_accepted.pop(0) if pending_accepted else (t, "?", ev.event_id)
             if name in _INTERESTING_UPDATES or failed:
                 status = "FAILED: " + short_error(raw_msg) if failed else "ok"
-                events.append(TimelineEvent(acc_time, "deployment", wfid, r.run_id,
-                                            f"update {name} -> {status}", event_id=acc_eid))
+                events.append(
+                    TimelineEvent(
+                        acc_time, "deployment", wfid, r.run_id, f"update {name} -> {status}", event_id=acc_eid
+                    )
+                )
             if name == "delete-version" and failed:
                 m = _VERSION_RE.search(raw_msg)  # build id from the full message
                 delete_blocks.append(DeleteBlock(acc_time, m.group(1) if m else None, short_error(raw_msg)))
         elif which == "signal_external_workflow_execution_initiated_event_attributes":
             tgt = att.workflow_execution.workflow_id
             m = _VERSION_RE.search(tgt)
-            events.append(TimelineEvent(t, "deployment", wfid, r.run_id,
-                                        f"signal {att.signal_name} -> {short(m.group(1)) if m else tgt}",
-                                        event_id=ev.event_id))
+            events.append(
+                TimelineEvent(
+                    t,
+                    "deployment",
+                    wfid,
+                    r.run_id,
+                    f"signal {att.signal_name} -> {short(m.group(1)) if m else tgt}",
+                    event_id=ev.event_id,
+                )
+            )
         elif which == "workflow_execution_signaled_event_attributes":
             if att.signal_name in _INTERESTING_SIGNALS:
-                events.append(TimelineEvent(t, "deployment", wfid, r.run_id,
-                                            f"recv-signal {att.signal_name}", event_id=ev.event_id))
+                events.append(
+                    TimelineEvent(
+                        t, "deployment", wfid, r.run_id, f"recv-signal {att.signal_name}", event_id=ev.event_id
+                    )
+                )
 
 
-def _derive_transitions(samples) -> List[CurrentTransition]:
+def _derive_transitions(samples) -> list[CurrentTransition]:
     # Collapse to ordered unique (changed_time, build) points.
     uniq = []
     for changed, build in samples:
         if not uniq or uniq[-1] != (changed, build):
             uniq.append((changed, build))
-    uniq.sort(key=lambda x: (x[0] or datetime.min.replace(tzinfo=timezone.utc)))
+    uniq.sort(key=lambda x: (x[0] or datetime.min.replace(tzinfo=UTC)))
     transitions = []
     prev_build = None
     for changed, build in uniq:
@@ -139,13 +152,13 @@ def _versions_in_window(transitions, versions, win_start, win_end):
     """Builds current at any point during the window (step function over transitions)."""
     if not transitions:
         return versions  # no routing info; return everything known
-    lo = win_start or datetime.min.replace(tzinfo=timezone.utc)
-    hi = win_end or datetime.max.replace(tzinfo=timezone.utc)
+    lo = win_start or datetime.min.replace(tzinfo=UTC)
+    hi = win_end or datetime.max.replace(tzinfo=UTC)
     in_play = {}
     for i, tr in enumerate(transitions):
-        start = tr.at or datetime.min.replace(tzinfo=timezone.utc)
-        end = transitions[i + 1].at if i + 1 < len(transitions) else datetime.max.replace(tzinfo=timezone.utc)
-        end = end or datetime.max.replace(tzinfo=timezone.utc)
+        start = tr.at or datetime.min.replace(tzinfo=UTC)
+        end = transitions[i + 1].at if i + 1 < len(transitions) else datetime.max.replace(tzinfo=UTC)
+        end = end or datetime.max.replace(tzinfo=UTC)
         if tr.to_build and start <= hi and end >= lo:
             in_play[tr.to_build] = versions.get(tr.to_build, VersionInPlay(tr.to_build, False, None))
     return in_play

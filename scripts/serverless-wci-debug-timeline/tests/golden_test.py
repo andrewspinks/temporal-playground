@@ -12,6 +12,7 @@ Fixture location (first match): $WCI_GOLDEN_FIXTURE, argv[1], or tests/fixture.j
   cp tests/fixture.example.json tests/fixture.json   # then edit it
   WCI_GOLDEN_FIXTURE=tests/fixture.json python tests/golden_test.py
 """
+
 import asyncio
 import json
 import os
@@ -63,7 +64,7 @@ def _run(fx):
         _, summary = build_report(dep, dep_a, versions, wcis, None, None)
         return summary
 
-    return asyncio.get_event_loop().run_until_complete(go())
+    return asyncio.run(go())
 
 
 def _actuals(summary, old, new):
@@ -72,8 +73,13 @@ def _actuals(summary, old, new):
     v = summary["versions"].get(old, {})
     w = (summary["wci"].get(old) or {}).get("invoke", {})
     term = (summary["wci"].get(old) or {}).get("terminal") or ""
-    hms = lambda s: (s or "")[11:19] or None
-    ms = lambda s: (s or "")[11:23] or None
+
+    def hms(s):
+        return (s or "")[11:19] or None
+
+    def ms(s):
+        return (s or "")[11:23] or None
+
     return {
         "transition_into_old_hms": into_old[0]["at"][11:19] if into_old else None,
         "transition_into_new_hms": into_new[0]["at"][11:19] if into_new else None,

@@ -1,0 +1,31 @@
+[tools]
+python = "3.12"
+uv = "latest"
+ruff = "latest"
+protoc = "latest"
+# For descriptors/gen_descriptors.sh; matches the temporal-auto-scaled-workers go.mod.
+go = "1.26.4"
+
+[tasks.sync]
+description = "Install Python dependencies into .venv (uv)"
+run = "uv sync"
+
+[tasks.wci]
+description = "Run the forensics tool (args appended: `mise run wci -- --deployment ...`)"
+run = "uv run python serverless_wci_debug_timeline.py"
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "ruff check ."
+
+[tasks.format]
+description = "Format with ruff"
+run = "ruff format ."
+
+[tasks.test]
+description = "Offline regression test (needs tests/fixture.json or $WCI_GOLDEN_FIXTURE)"
+run = "uv run python tests/golden_test.py"
+
+[tasks.gen-descriptors]
+description = "Regenerate the proto descriptor set (set WCI_REPO to the Go module checkout)"
+run = "descriptors/gen_descriptors.sh"

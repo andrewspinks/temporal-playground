@@ -1,61 +1,61 @@
 """Shared result/timeline data structures consumed by the report layer."""
+
 from __future__ import annotations
 
 import dataclasses
 from datetime import datetime
-from typing import Dict, List, Optional
 
 
 @dataclasses.dataclass
 class TimelineEvent:
-    time: Optional[datetime]
+    time: datetime | None
     source: str  # 'deployment' | 'version:<build8>' | 'wci:<build8>'
     workflow_id: str
     run_id: str
     summary: str
     # The history event this row links to (the triggering event, where known).
-    event_id: Optional[int] = None
+    event_id: int | None = None
 
 
 @dataclasses.dataclass
 class WorkerSetChange:
-    time: Optional[datetime]
-    size: Optional[int]
+    time: datetime | None
+    size: int | None
     status: str
     trigger: str
     run_id: str
-    trigger_event_id: Optional[int] = None
+    trigger_event_id: int | None = None
 
 
 @dataclasses.dataclass
 class VersionInPlay:
     build_id: str
     serverless: bool
-    provider_type: Optional[str] = None
+    provider_type: str | None = None
 
 
 @dataclasses.dataclass
 class CurrentTransition:
-    at: Optional[datetime]
-    from_build: Optional[str]
-    to_build: Optional[str]
+    at: datetime | None
+    from_build: str | None
+    to_build: str | None
     via_ramp: bool = False
 
 
 @dataclasses.dataclass
 class DeleteBlock:
     at: datetime
-    build_id: Optional[str]
+    build_id: str | None
     reason: str
 
 
 @dataclasses.dataclass
 class DeploymentAnalysis:
     workflow_id: str
-    transitions: List[CurrentTransition]
-    versions_in_play: Dict[str, VersionInPlay]
-    delete_blocks: List[DeleteBlock]
-    events: List[TimelineEvent]
+    transitions: list[CurrentTransition]
+    versions_in_play: dict[str, VersionInPlay]
+    delete_blocks: list[DeleteBlock]
+    events: list[TimelineEvent]
 
 
 @dataclasses.dataclass
@@ -63,19 +63,19 @@ class VersionAnalysis:
     build_id: str
     workflow_id: str
     serverless: bool
-    provider_type: Optional[str]
-    task_queues: List[str]
-    became_current: Optional[datetime]
-    demote_received: Optional[datetime]
-    draining_start: Optional[datetime]
-    drained_at: Optional[datetime]
-    deleted_at: Optional[datetime]
-    events: List[TimelineEvent]
+    provider_type: str | None
+    task_queues: list[str]
+    became_current: datetime | None
+    demote_received: datetime | None
+    draining_start: datetime | None
+    drained_at: datetime | None
+    deleted_at: datetime | None
+    events: list[TimelineEvent]
     # Compute-provider validation (from version_state.compute_status.provider_validation).
     # validation_ok is None when unknown (e.g. non-serverless / no compute_status).
-    validation_ok: Optional[bool] = None
-    validation_error: Optional[str] = None
-    validation_last_check: Optional[datetime] = None
+    validation_ok: bool | None = None
+    validation_error: str | None = None
+    validation_last_check: datetime | None = None
 
 
 @dataclasses.dataclass
@@ -84,18 +84,18 @@ class InvokeStats:
     started: int
     completed: int
     failed: int
-    first: Optional[datetime]
-    last: Optional[datetime]
-    per_minute: List  # list[(minute_str, count)]
+    first: datetime | None
+    last: datetime | None
+    per_minute: list  # list[(minute_str, count)]
     peak_per_min: int
     after_draining_start: int
     after_drained: int
-    by_trigger: Dict = None  # trigger label -> invoke count
+    by_trigger: dict = None  # trigger label -> invoke count
     # Trigger event of the first / last invoke (for timeline deep-links).
-    first_run: Optional[str] = None
-    first_event_id: Optional[int] = None
-    last_run: Optional[str] = None
-    last_event_id: Optional[int] = None
+    first_run: str | None = None
+    first_event_id: int | None = None
+    last_run: str | None = None
+    last_event_id: int | None = None
 
 
 @dataclasses.dataclass
@@ -105,13 +105,13 @@ class WciAnalysis:
     runs: int
     invoke: InvokeStats
     pullstats_count: int
-    other_activities: Dict[str, int]
-    last_scale_up: Optional[datetime]
-    terminal: Optional[str]  # how the WCI chain ended (completed reason, etc.)
-    backlog_series: List  # list[(time, group, backlog/rate dict)]
-    events: List[TimelineEvent]
+    other_activities: dict[str, int]
+    last_scale_up: datetime | None
+    terminal: str | None  # how the WCI chain ended (completed reason, etc.)
+    backlog_series: list  # list[(time, group, backlog/rate dict)]
+    events: list[TimelineEvent]
     # Worker-set launch strategy (Cloud Run / ECS): instance-count changes over time.
-    worker_set_series: List = None  # list[(time, size, status)]
-    last_worker_set_size: Optional[int] = None
+    worker_set_series: list = None  # list[(time, size, status)]
+    last_worker_set_size: int | None = None
     # ValidateSpec activity failures observed over the WCI chain: list[(time, message)].
-    validate_failures: List = None
+    validate_failures: list = None

@@ -4,18 +4,17 @@ For a single build id, walks the version workflow's continue-as-new chain and
 derives drainage start/finish, when it became current, when it was demoted, and
 when it was deleted; plus whether it is serverless and on which task queues.
 """
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import List, Optional
+from datetime import UTC, datetime
 
 from .decode import decode_first
 from .model import TimelineEvent, VersionAnalysis
-from .util import (DRAINAGE_STATUS, event_kind, event_time, short,
-                   started_input_payloads, ts)
+from .util import DRAINAGE_STATUS, event_kind, event_time, short, started_input_payloads, ts
 
 
-def _provider(compute_config) -> Optional[str]:
+def _provider(compute_config) -> str | None:
     for grp in compute_config.scaling_groups.values():
         if grp.provider_type:
             return grp.provider_type
@@ -24,26 +23,26 @@ def _provider(compute_config) -> Optional[str]:
 
 def analyze_version(build_id, runs) -> VersionAnalysis:
     wfid = runs[0].workflow_id if runs else ""
-    events: List[TimelineEvent] = []
+    events: list[TimelineEvent] = []
     src = f"version:{short(build_id, 8)}"
 
     serverless = False
     provider = None
     task_queues: set = set()
-    became_current: Optional[datetime] = None
-    draining_start: Optional[datetime] = None
-    drained_at: Optional[datetime] = None
-    demote_received: Optional[datetime] = None
-    deleted_at: Optional[datetime] = None
-    demote_ref = (None, None)   # (run_id, event_id) of the demote signal
+    became_current: datetime | None = None
+    draining_start: datetime | None = None
+    drained_at: datetime | None = None
+    demote_received: datetime | None = None
+    deleted_at: datetime | None = None
+    demote_ref = (None, None)  # (run_id, event_id) of the demote signal
     deleted_ref = (None, None)  # (run_id, event_id) of the completed event
-    validation_ok: Optional[bool] = None
-    validation_error: Optional[str] = None
-    validation_last_check: Optional[datetime] = None
+    validation_ok: bool | None = None
+    validation_error: str | None = None
+    validation_last_check: datetime | None = None
 
     for r in runs:
         args = decode_first(started_input_payloads(r.history))
-        if args is None or isinstance(args, (dict, bytes)):
+        if args is None or isinstance(args, dict | bytes):
             continue
         vs = args.version_state
         if vs.HasField("compute_config"):
@@ -75,30 +74,48 @@ def analyze_version(build_id, runs) -> VersionAnalysis:
                 t = event_time(ev)
                 if demote_received is None:
                     demote_received, demote_ref = t, (r.run_id, ev.event_id)
-                events.append(TimelineEvent(t, src, wfid, r.run_id,
-                                            "recv-signal demote-version (draining begins)", event_id=ev.event_id))
+                events.append(
+                    TimelineEvent(
+                        t, src, wfid, r.run_id, "recv-signal demote-version (draining begins)", event_id=ev.event_id
+                    )
+                )
             elif which == "workflow_execution_completed_event_attributes":
                 deleted_at, deleted_ref = event_time(ev), (r.run_id, ev.event_id)
 
     # DRAINING is triggered by the demote signal; link to that event.
     if draining_start:
-        events.append(TimelineEvent(draining_start, src, wfid, demote_ref[0], "drainage status -> DRAINING",
-                                    event_id=demote_ref[1]))
+        events.append(
+            TimelineEvent(
+                draining_start, src, wfid, demote_ref[0], "drainage status -> DRAINING", event_id=demote_ref[1]
+            )
+        )
     if drained_at:  # state-derived (no single event) — no deep link
         events.append(TimelineEvent(drained_at, src, wfid, "", "drainage status -> DRAINED"))
     if deleted_at:
-        events.append(TimelineEvent(deleted_at, src, wfid, deleted_ref[0],
-                                    "version workflow COMPLETED (deleted)", event_id=deleted_ref[1]))
+        events.append(
+            TimelineEvent(
+                deleted_at, src, wfid, deleted_ref[0], "version workflow COMPLETED (deleted)", event_id=deleted_ref[1]
+            )
+        )
     if validation_ok is False:
-        events.append(TimelineEvent(validation_last_check, src, wfid, "",
-                                    f"compute validation FAILING: {validation_error}"))
+        events.append(
+            TimelineEvent(validation_last_check, src, wfid, "", f"compute validation FAILING: {validation_error}")
+        )
 
-    events.sort(key=lambda e: (e.time or datetime.min.replace(tzinfo=timezone.utc)))
+    events.sort(key=lambda e: (e.time or datetime.min.replace(tzinfo=UTC)))
     return VersionAnalysis(
-        build_id=build_id, workflow_id=wfid, serverless=serverless, provider_type=provider,
-        task_queues=sorted(task_queues), became_current=became_current,
-        demote_received=demote_received, draining_start=draining_start,
-        drained_at=drained_at, deleted_at=deleted_at, events=events,
-        validation_ok=validation_ok, validation_error=validation_error,
+        build_id=build_id,
+        workflow_id=wfid,
+        serverless=serverless,
+        provider_type=provider,
+        task_queues=sorted(task_queues),
+        became_current=became_current,
+        demote_received=demote_received,
+        draining_start=draining_start,
+        drained_at=drained_at,
+        deleted_at=deleted_at,
+        events=events,
+        validation_ok=validation_ok,
+        validation_error=validation_error,
         validation_last_check=validation_last_check,
     )

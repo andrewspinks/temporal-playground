@@ -1,14 +1,13 @@
 """Render the consolidated timeline, drain summary, and per-WCI metrics."""
+
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from typing import Dict, List, Optional
+from datetime import UTC, datetime
 
 from .model import DeploymentAnalysis, VersionAnalysis, WciAnalysis
-from .util import (DEFAULT_UI_BASE, cloud_event_url, cloud_url, dt_str, hhmmss,
-                   iso, short, short_error)
+from .util import DEFAULT_UI_BASE, cloud_event_url, cloud_url, dt_str, hhmmss, iso, short, short_error
 
-_MIN = datetime.min.replace(tzinfo=timezone.utc)
+_MIN = datetime.min.replace(tzinfo=UTC)
 
 
 def _blocked_builds(dep: DeploymentAnalysis):
@@ -34,8 +33,10 @@ def _render_validation(L, versions, wcis):
             L.append(f"- {short(b)} [{provider}]: **PASS** (last checked {dt_str(v.validation_last_check)})")
         elif v.validation_ok is False:
             any_fail = True
-            L.append(f"- {short(b)} [{provider}]: **FAILED** — {short_error(v.validation_error)} "
-                     f"(last checked {dt_str(v.validation_last_check)})")
+            L.append(
+                f"- {short(b)} [{provider}]: **FAILED** — {short_error(v.validation_error)} "
+                f"(last checked {dt_str(v.validation_last_check)})"
+            )
         else:
             L.append(f"- {short(b)} [{provider}]: validation status unknown (no compute_status)")
         # Historical ValidateSpec activity failures seen in the controller.
@@ -43,15 +44,16 @@ def _render_validation(L, versions, wcis):
         vf = (w.validate_failures if w else None) or []
         if vf:
             any_fail = True
-            L.append(f"    - {len(vf)} ValidateSpec activity failure(s); first {dt_str(vf[0][0])}: "
-                     f"{short_error(vf[0][1])}")
+            L.append(
+                f"    - {len(vf)} ValidateSpec activity failure(s); first {dt_str(vf[0][0])}: {short_error(vf[0][1])}"
+            )
     if versions and any_pass and not any_fail:
         L.append("")
         L.append("_All checked versions passed compute-provider validation._")
     L.append("")
 
 
-def _histogram(per_minute, peak) -> List[str]:
+def _histogram(per_minute, peak) -> list[str]:
     lines = []
     mx = peak or 1
     for m, c in per_minute:
@@ -65,17 +67,17 @@ def _histogram(per_minute, peak) -> List[str]:
 def build_report(
     deployment: str,
     dep: DeploymentAnalysis,
-    versions: Dict[str, VersionAnalysis],
-    wcis: Dict[str, WciAnalysis],
-    win_start: Optional[datetime],
-    win_end: Optional[datetime],
-    namespace: Optional[str] = None,
-    link_groups: Optional[List] = None,
+    versions: dict[str, VersionAnalysis],
+    wcis: dict[str, WciAnalysis],
+    win_start: datetime | None,
+    win_end: datetime | None,
+    namespace: str | None = None,
+    link_groups: list | None = None,
     ui_base: str = DEFAULT_UI_BASE,
-    poller_statuses: Optional[List] = None,
+    poller_statuses: list | None = None,
     debug: bool = False,
 ) -> tuple:
-    L: List[str] = []
+    L: list[str] = []
     blocked = _blocked_builds(dep)
     poller_statuses = poller_statuses or []
 
@@ -98,7 +100,9 @@ def build_report(
     L.append("")
 
     L.append("## Drain summary")
-    L.append("| build | serverless | validation | became current | draining start | drained | deleted | delete-blocked (pollers) |")
+    L.append(
+        "| build | serverless | validation | became current | draining start | drained | deleted | delete-blocked (pollers) |"
+    )
     L.append("|---|---|---|---|---|---|---|---|")
     for b, v in versions.items():
         L.append(
@@ -123,19 +127,27 @@ def build_report(
         inv = w.invoke
         provider = (v.provider_type if v else None) or "unknown"
         L.append(f"## WCI metrics — {short(b)} [{provider}] ({w.runs} runs)")
-        L.append(f"- InvokeWorker invocations (Lambda invoke-strategy): **{inv.total}** "
-                 f"(started {inv.started} / completed {inv.completed} / failed {inv.failed})")
+        L.append(
+            f"- InvokeWorker invocations (Lambda invoke-strategy): **{inv.total}** "
+            f"(started {inv.started} / completed {inv.completed} / failed {inv.failed})"
+        )
         if inv.by_trigger:
             triggers = ", ".join(f"{k}: {v}" for k, v in sorted(inv.by_trigger.items(), key=lambda kv: -kv[1]))
             L.append(f"- Invokes by trigger: {triggers}")
-        L.append(f"- Window: {hhmmss(inv.first)} .. {hhmmss(inv.last)}  |  peak {inv.peak_per_min}/min  "
-                 f"|  last scale-up {hhmmss(w.last_scale_up)}")
+        L.append(
+            f"- Window: {hhmmss(inv.first)} .. {hhmmss(inv.last)}  |  peak {inv.peak_per_min}/min  "
+            f"|  last scale-up {hhmmss(w.last_scale_up)}"
+        )
         if v:
-            L.append(f"- Invokes AFTER draining start ({hhmmss(v.draining_start)}): **{inv.after_draining_start}**  "
-                     f"|  AFTER drained ({hhmmss(v.drained_at)}): **{inv.after_drained}**")
+            L.append(
+                f"- Invokes AFTER draining start ({hhmmss(v.draining_start)}): **{inv.after_draining_start}**  "
+                f"|  AFTER drained ({hhmmss(v.drained_at)}): **{inv.after_drained}**"
+            )
         if w.worker_set_series:
-            L.append(f"- **Worker pool size (instances)** — set via `UpdateWorkerSetSize`; last set to "
-                     f"**{w.last_worker_set_size}** ({len(w.worker_set_series)} change(s)):")
+            L.append(
+                f"- **Worker pool size (instances)** — set via `UpdateWorkerSetSize`; last set to "
+                f"**{w.last_worker_set_size}** ({len(w.worker_set_series)} change(s)):"
+            )
             for ch in w.worker_set_series:
                 L.append(f"    - {dt_str(ch.time)}  size={ch.size}  ({ch.status})  ← trigger: {ch.trigger}")
         L.append(f"- PullStats polls: {w.pullstats_count}  |  other: {w.other_activities}")
@@ -204,16 +216,23 @@ def _render_pollers(L, poller_statuses):
         if not st.pollers:
             L.append("- (no active pollers)")
         if st.mismatches:
-            L.append(f"  > ⚠️ {len(st.mismatches)} poller(s) are NOT on the current version "
-                     f"`{st.current_version}`; tasks route to the current version, so these workers get nothing. "
-                     f"Fix the worker's deployment name / build id (or set the current version to match).")
+            L.append(
+                f"  > ⚠️ {len(st.mismatches)} poller(s) are NOT on the current version "
+                f"`{st.current_version}`; tasks route to the current version, so these workers get nothing. "
+                f"Fix the worker's deployment name / build id (or set the current version to match)."
+            )
         L.append("")
         out[st.task_queue] = {
             "current_version": st.current_version,
             "error": st.error,
             "pollers": [
-                {"identity": p.identity, "type": p.tq_type, "version": p.version,
-                 "mode": p.mode, "mismatch": p in st.mismatches}
+                {
+                    "identity": p.identity,
+                    "type": p.tq_type,
+                    "version": p.version,
+                    "mode": p.mode,
+                    "mismatch": p in st.mismatches,
+                }
                 for p in st.pollers
             ],
         }
@@ -231,8 +250,12 @@ def _links_json(namespace, link_groups, ui_base):
             "workflow_id": wfid,
             "workflow_url": cloud_url(namespace, wfid, ui_base=ui_base),
             "runs": [
-                {"run_id": r.run_id, "start": iso(r.start_time), "end": iso(r.end_time),
-                 "url": cloud_url(namespace, wfid, r.run_id, ui_base=ui_base)}
+                {
+                    "run_id": r.run_id,
+                    "start": iso(r.start_time),
+                    "end": iso(r.end_time),
+                    "url": cloud_url(namespace, wfid, r.run_id, ui_base=ui_base),
+                }
                 for r in runs
             ],
         }
@@ -286,9 +309,7 @@ def _json_summary(deployment, dep, versions, wcis, win_start, win_end, blocked):
     return {
         "deployment": deployment,
         "window": {"start": iso(win_start), "end": iso(win_end)},
-        "transitions": [
-            {"at": iso(t.at), "from": t.from_build, "to": t.to_build} for t in dep.transitions
-        ],
+        "transitions": [{"at": iso(t.at), "from": t.from_build, "to": t.to_build} for t in dep.transitions],
         "versions": {
             b: {
                 "serverless": v.serverless,
@@ -331,16 +352,19 @@ def _json_summary(deployment, dep, versions, wcis, win_start, win_end, blocked):
                 "worker_set": {
                     "last_size": w.last_worker_set_size,
                     "changes": [
-                        {"at": iso(ch.time), "size": ch.size, "status": ch.status,
-                         "trigger": ch.trigger, "run_id": ch.run_id,
-                         "trigger_event_id": ch.trigger_event_id}
+                        {
+                            "at": iso(ch.time),
+                            "size": ch.size,
+                            "status": ch.status,
+                            "trigger": ch.trigger,
+                            "run_id": ch.run_id,
+                            "trigger_event_id": ch.trigger_event_id,
+                        }
                         for ch in (w.worker_set_series or [])
                     ],
                 },
             }
             for b, w in wcis.items()
         },
-        "delete_blocks": [
-            {"at": iso(db.at), "build": db.build_id, "reason": db.reason} for db in dep.delete_blocks
-        ],
+        "delete_blocks": [{"at": iso(db.at), "build": db.build_id, "reason": db.reason} for db in dep.delete_blocks],
     }
